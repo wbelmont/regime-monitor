@@ -78,6 +78,71 @@ is still an OPEN GAP** (the detector is slow to call tops on grinding declines).
 
 ## What's DONE (so the next chat doesn't redo it)
 
+### ✦ Dashboard redesigned into 3 independently-tracked layers (2026-06-07)
+
+The dashboard + history now separate the three things the owner reasons about,
+each tracked on its own so you can watch signals fire one by one:
+
+- **Layer 1 — P(bear), the continuous risk dial** (top). Big number + a
+  red/amber/green gauge with a needle, shown with adaptive precision
+  (`_fmt_prob`: <1% renders as e.g. `0.3%` instead of a bare `0%`, so the dial
+  is informative in calm bulls). This is the aggressiveness dial.
+- **Layer 2 — binary Bull/Bear regime** (its own card + step sparkline). The
+  hard CJM argmax label (`regime_binary` 0/1), distinct from the dial and from
+  the 3-way `stance`.
+- **Layer 3 — Signals overlays** (its own card + event-timeline sparkline):
+  **Short-entry** (shown "not yet built" until that overlay lands) and **Long
+  re-entry** (live; armed/fired + last-fired date). Each tracked independently.
+- **History schema expanded** (`cli._log_history` now read-modify-writes the
+  whole file, back-filling older rows): added `regime_binary`, `reentry_flag`,
+  `short_entry_flag`, `bear_prob_overlay`. `recommend.build_recommendation` adds
+  `regime_binary` and passes through a future `short_entry_flag`. Sparklines
+  dedup to one row/day. `notify.py` unaffected (reads the rec/state, not the CSV).
+- No CJM math changed; the dashboard is display-only.
+- **Note:** sparklines look flat right now because `signal_history.csv` only has
+  one calendar day (2026-06-05) of near-0% reads; they fill in as the daily job
+  accumulates dates. The hosted GitHub Pages action commits the CSV so the
+  hosted history grows over time.
+
+### ✦ FRED data-layer fix + downside/curve features + coarse entry-timing A/B (2026-06-07)
+
+Investigated whether to chase NEW signals vs extend the sample back to 1998.
+Conclusion: extending to 1998 is LOW value for short-entry timing (dot-com is
+already in-sample from 2000; expanding window means old data barely shifts
+today's centroids; λ is flat; the entry lag is structural). New
+signals/features are higher value — so pursued those.
+
+- **Root-cause data bug fixed.** `hy_oas` and `y3m` were all-NaN because
+  `pandas_datareader` is **broken on Python 3.13** (`No module named
+  'distutils'`), so EVERY FRED pull silently failed and fell back. Rewrote
+  `data._fred` to hit the keyless `fredgraph.csv` endpoint directly (short
+  timeout → fast fallback). Also fixed the Yahoo yield fallbacks to a
+  consistent `/10` scale (`^TNX/10` for y10, **new `^IRX/10` for y3m**) so
+  `curve_slope = y10 - y3m` has the right sign/scale.
+- **`y3m` / `curve_slope` now populated** (backfilled from `^IRX/10` into the
+  cache, 6646/6646 rows; curve inverts ~14% of history — 2000/2006-07/2019/
+  2022-23, correct sign). **`hy_oas` STILL empty**: FRED's `fredgraph.csv`
+  download times out from this environment and there is no free non-FRED OAS
+  equivalent. It will populate automatically once FRED is reachable.
+- **New features added** in `features.py` (always computed): `drawdown_63`
+  (price vs trailing-63d high), `downside_dev_21` (semi-deviation of negative
+  returns), plus `curve_slope` now usable. Intended to react to GRINDING
+  declines faster than symmetric vol/momentum.
+- **Coarse A/B (`scripts/eval_features.py`, n_init=3, refit=63d, full OOS):**
+  appending the 3 features to the 2-state CJM **did NOT help** short-entry
+  timing (Δlag ~0 on 2007/2011/2015/2018), **regressed 2022 (+5d)** and
+  **failed to cross 0.60 at all on 2025-26**; whipsaw unchanged (1.37/yr). The
+  new features are highly correlated with the existing vol/mom set, so they
+  **dilute** the equal-weighted Euclidean clustering rather than sharpen it.
+  This confirms the entry lag is **structural**, not an info deficit.
+- **Decision: production keeps the BASELINE 8 features** (`REGIME_FEATURES`
+  reverted; `REGIME_FEATURES_BASELINE` + `REGIME_FEATURES_EXPERIMENTAL` kept
+  for the harness). No regression shipped; no CJM math changed.
+- **Next to try (didn't help → so don't re-append):** (a) REPLACE-not-append —
+  swap a redundant momentum feature for `drawdown_63` and re-run the A/B; or
+  (b) a **separate short-ENTRY overlay** (mirror of the re-entry overlay) that
+  fires on `drawdown_63` crossing a threshold, kept OUT of the pure CJM signal.
+
 ### ✦ OPERATIONALIZED — daily iMessage digest + hosted dashboard + driver panel (2026-06-07)
 
 The signal is now a live daily tool, not just research. No CJM math changed.
@@ -199,12 +264,15 @@ roughly neutral Sharpe/DD.
 > risk-tolerance dial. Judge ideas by signal quality, not just backtest P&L.
 
 1. **Short-ENTRY timing (the open gap).** The signal is slow to call the top on
-   grinding declines (2011 97 d, 2015 92 d, 2026 56 d after the peak). Explore
-   faster/forward-looking REGIME_FEATURES or an entry rule. Highest-value
-   remaining timing work.
-2. **Feature review for the CJM** (`REGIME_FEATURES`). Downside-deviation /
-   drawdown features (Shu & Mulvey lean on these) likely help detection AND
-   entry timing.
+   grinding declines (2011 97 d, 2015 92 d, 2026 56 d after the peak). NOTE
+   (2026-06-07): appending downside/drawdown/curve features to the CJM did NOT
+   help (see "What's DONE"). Best remaining bets: a **separate short-entry
+   overlay** (mirror of the re-entry overlay, fires on `drawdown_63`), or
+   REPLACE-not-append feature selection. Highest-value remaining timing work.
+2. **Feature review for the CJM** (`REGIME_FEATURES`). `drawdown_63`,
+   `downside_dev_21`, `curve_slope` now EXIST (in
+   `REGIME_FEATURES_EXPERIMENTAL`); a coarse A/B showed *appending* them dilutes
+   the 2-state clustering. Try REPLACE-not-append next, or feature weighting.
 3. **(Mostly done) Re-entry overlay is live** — `REENTRY_OVERLAY=True` and now
    surfaced in the daily digest + dashboard (display-only; doesn't alter the
    traded `bear_prob`). Remaining option: also write `bear_prob_overlay` into the
@@ -212,19 +280,8 @@ roughly neutral Sharpe/DD.
 4. **(Optional) revisit allocation** (`LEVERED_WEIGHT`, weight map) — only after
    the signal/timing is locked.
 5. **(Optional) 3-state CJM** (bull/neutral/bear) for a finer dial.
-6. **HY OAS is empty in the cache** (`hy_oas` all-NaN) — a refresh may restore
-   the credit-spread feature; check if pursuing #2.
-
----
-
-## Gotchas / environment
-
-- Live package is `./regime`; **ignore `src/regime/`** (stale duplicate).
-- Cached signals in `data/cache/`: `signals_jp50_full.parquet` (full-rigor, has
-  `bear_prob` + `cjm_bear_nowcast`), `signals_jp{λ}_sweep.parquet` (fast 45-day
-  λ sweep), `raw_inputs.parquet` (data cache).
-- Full walk-forward ≈ 13 min; run `scripts/run_walkforward.py` /
-  `sweep_lambda.py` in the background and watch `reports/*.log`.
-- After editing `regime/*.py` in a notebook, `importlib.reload` the modules.
-- `pandas` resample needs `'ME'` not `'M'` in this version.
-- Editor lint about pandas/sklearn/markdown types is cosmetic — ignore.
+6. **HY OAS still empty** (`hy_oas` all-NaN). ROOT CAUSE FOUND & partly fixed
+   (2026-06-07): `pandas_datareader` is broken on Py3.13, so FRED pulls failed
+   silently; `data._fred` now uses `fredgraph.csv` directly. `y3m`/`curve_slope`
+   are backfilled (Yahoo `^IRX`), but `hy_oas` is FRED-only and `fredgraph.csv`
+   times out from this environment — it will populate once FRED is reachable.

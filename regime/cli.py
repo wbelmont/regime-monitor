@@ -60,20 +60,60 @@ def _load_features(refresh: bool) -> pd.DataFrame:
 
 
 def _log_history(rec: dict) -> None:
-    """Append today's call to a CSV so you can review the track record later."""
+    """Append today's call to a CSV so you can review the track record later.
+
+    Tracks each LAYER as its own column so the dashboard can plot them
+    separately and you can see signals firing one by one:
+      * next_bear_prob   — the continuous CJM bear probability (the risk dial);
+      * regime_binary    — the hard Bull(0)/Bear(1) regime label;
+      * stance           — the 3-way BULL/NEUTRAL/BEAR thresholding of the dial;
+      * reentry_flag     — long re-entry / cover-short overlay fired (0/1);
+      * short_entry_flag — short-entry overlay fired (0/1; 0 until that lands);
+      * bear_prob_overlay— the re-entry overlay's capped reading (if enabled).
+
+    Read-modify-writes the whole (tiny, ~daily) file so the schema stays
+    consistent even when columns are added later — older rows are back-filled
+    with blanks rather than misaligned.
+    """
+    columns = [
+        "date",
+        "run_at",
+        "stance",
+        "current_regime",
+        "next_bear_prob",
+        "regime_binary",
+        "reentry_flag",
+        "short_entry_flag",
+        "bear_prob_overlay",
+    ]
     row = {
         "date": pd.Timestamp(rec["as_of"]).date().isoformat(),
         "run_at": dt.datetime.now().isoformat(timespec="seconds"),
         "stance": rec["stance"],
         "current_regime": rec["current_regime"],
         "next_bear_prob": round(rec["next_bear_prob"], 4),
+        "regime_binary": int(rec.get("regime_binary", 0)),
+        "reentry_flag": int(bool(rec.get("reentry_flag", False))),
+        "short_entry_flag": int(bool(rec.get("short_entry_flag", False))),
+        "bear_prob_overlay": (
+            round(float(rec["bear_prob_overlay"]), 4)
+            if rec.get("bear_prob_overlay") is not None
+            else ""
+        ),
     }
     f = config.SIGNAL_HISTORY_FILE
-    df = pd.DataFrame([row])
+    new = pd.DataFrame([row])
     if f.exists():
-        df.to_csv(f, mode="a", header=False, index=False)
+        try:
+            old = pd.read_csv(f)
+        except Exception:
+            old = pd.DataFrame(columns=columns)
+        combined = pd.concat([old, new], ignore_index=True)
     else:
-        df.to_csv(f, index=False)
+        combined = new
+    # Ensure all columns exist (back-fill older rows) and keep a stable order.
+    combined = combined.reindex(columns=columns)
+    combined.to_csv(f, index=False)
 
 
 def cmd_update(args) -> None:

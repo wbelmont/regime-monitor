@@ -34,6 +34,10 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the persist step can rebase onto the latest main
+          # (a shallow clone can't reliably rebase).
+          fetch-depth: 0
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
@@ -49,15 +53,29 @@ jobs:
 
       - name: Persist accumulated history
         run: |
-          if ! git diff --quiet -- data/signal_history.csv; then
-            git config user.name "regime-bot"
-            git config user.email "regime-bot@users.noreply.github.com"
-            git add data/signal_history.csv
-            git commit -m "chore: daily signal history [skip ci]"
-            git push
-          else
+          if git diff --quiet -- data/signal_history.csv; then
             echo "No history change to commit."
+            exit 0
           fi
+          git config user.name "regime-bot"
+          git config user.email "regime-bot@users.noreply.github.com"
+          git add data/signal_history.csv
+          git commit -m "chore: daily signal history [skip ci]"
+          # The remote main can advance between checkout and push (overlapping
+          # runs, or a manual push), which previously caused a non-fast-forward
+          # rejection. Rebase our single commit onto the latest origin/main and
+          # retry a few times with backoff to win the race safely.
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase --autostash origin "${GITHUB_REF_NAME}" \
+               && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "Pushed history on attempt ${attempt}."
+              exit 0
+            fi
+            echo "Push attempt ${attempt} failed (remote moved); retrying..."
+            sleep $((attempt * 3))
+          done
+          echo "::error::Could not push signal history after retries."
+          exit 1
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

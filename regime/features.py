@@ -49,6 +49,19 @@ def build_features(raw: pd.DataFrame) -> pd.DataFrame:
     d["macd"] = macd
     d["macd_diff"] = macd - macd_sig
 
+    # --- Downside / drawdown (asymmetric risk) ---
+    # Shu & Mulvey lean on downside-focused features. These react to *grinding*
+    # declines faster than symmetric momentum/vol (which need a big accumulated
+    # move to flip), so they target the slow short-ENTRY timing on slow sell-offs.
+    #   * drawdown_63: current price vs its trailing-63d high (<=0; deeper = more
+    #     bearish). Turns negative on day one of a pullback from a local peak.
+    #   * downside_dev_21: rolling std of ONLY the negative daily returns
+    #     (semi-deviation) — rises when losses cluster, ignoring upside vol.
+    roll_high_63 = d["market"].rolling(63, min_periods=10).max()
+    d["drawdown_63"] = d["market"] / roll_high_63 - 1.0
+    neg_ret = d["mkt_ret"].where(d["mkt_ret"] < 0, 0.0)
+    d["downside_dev_21"] = neg_ret.rolling(21, min_periods=5).std()
+
     # --- Volatility / fear ---
     d["vix_chg"] = d["vix"].diff()
     d["vix_ma_21"] = d["vix"].rolling(21).mean()
@@ -68,7 +81,16 @@ def build_features(raw: pd.DataFrame) -> pd.DataFrame:
 
 # Features fed to the unsupervised regime labeler (describe the *state* of the
 # market). Kept compact and standardized downstream.
-REGIME_FEATURES = [
+#
+# NOTE (2026-06-07): a coarse A/B (scripts/eval_features.py) showed that simply
+# APPENDING drawdown_63/downside_dev_21/curve_slope to the 2-state CJM did NOT
+# improve short-entry timing (delta ~0 on the grinding declines) and slightly
+# regressed 2022 (+5d) and 2025-26 (failed to cross 0.60). The extra features
+# are highly correlated with the existing vol/mom set, so they dilute rather
+# than sharpen the equal-weighted Euclidean clustering. Production therefore
+# keeps the BASELINE set; the experimental superset is kept for the next
+# iteration (try REPLACE-not-append, or a separate short-entry overlay).
+REGIME_FEATURES_BASELINE = [
     "mkt_ret",
     "vol_21",
     "vix",
@@ -78,6 +100,18 @@ REGIME_FEATURES = [
     "mom_63",
     "mom_126",
 ]
+
+# Experimental superset (NOT in production — see note above). Used by the
+# signal-quality A/B harness (scripts/eval_features.py) only.
+REGIME_FEATURES_EXPERIMENTAL = REGIME_FEATURES_BASELINE + [
+    "drawdown_63",
+    "downside_dev_21",
+    "curve_slope",
+]
+
+# Production feature set fed to the labeler.
+REGIME_FEATURES = list(REGIME_FEATURES_BASELINE)
+
 
 # Features fed to the supervised next-regime predictor.
 PREDICTOR_FEATURES = [

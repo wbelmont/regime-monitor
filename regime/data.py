@@ -7,6 +7,8 @@ source is down, we fall back gracefully (FRED -> Yahoo).
 from __future__ import annotations
 
 import datetime as dt
+import io
+import urllib.request
 
 import pandas as pd
 
@@ -30,10 +32,31 @@ def _is_fresh(path, max_age_hours: int = 18) -> bool:
 
 
 def _fred(series: str, start: str, end: str) -> pd.Series:
-    import pandas_datareader.data as web
+    """Fetch a FRED series via the public fredgraph CSV endpoint.
 
-    df = web.DataReader(series, "fred", start, end)
-    return df.iloc[:, 0].rename(series)
+    We do NOT use `pandas_datareader` here: it imports `distutils`, which was
+    removed from the stdlib in Python 3.12+, so it raises ``ModuleNotFoundError``
+    on this project's 3.13 venv and made every FRED pull fail *silently* (the
+    callers below swallow the exception and fall back), which is why `y3m` and
+    `hy_oas` were all-NaN in the cache. The fredgraph CSV endpoint needs no key
+    and returns a simple two-column (date, value) table. A short timeout means
+    that if FRED is unreachable we fail fast and let the Yahoo fallback run.
+    """
+    url = (
+        "https://fred.stlouisfed.org/graph/fredgraph.csv"
+        f"?id={series}&cosd={start}&coed={end}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw = resp.read().decode("utf-8")
+    df = pd.read_csv(io.StringIO(raw))
+    date_col, val_col = df.columns[0], df.columns[1]
+    s = pd.Series(
+        pd.to_numeric(df[val_col].replace(".", pd.NA), errors="coerce").to_numpy(),
+        index=pd.to_datetime(df[date_col]),
+        name=series,
+    )
+    return s.dropna()
 
 
 def _yahoo_close(ticker: str, start: str, end: str) -> pd.Series:
@@ -73,15 +96,25 @@ def load_raw(refresh: bool = False) -> pd.DataFrame:
     try:
         y10 = _fred(config.FRED_10Y, start, end).rename("y10")
     except Exception:
+        # ^TNX is quoted as 10x the yield historically in this cache's lineage
+        # (e.g. 4.49% -> 0.449). Keep that /10 scale so the whole y10 series is
+        # internally consistent over time (the CJM standardizes features, so the
+        # absolute scale is irrelevant — only consistency + sign matter).
         y10 = (_yahoo_close(config.TNX_TICKER, start, end) / 10.0).rename("y10")
 
     # --- 3m yield (for curve slope); optional ---
     try:
         y3m = _fred(config.FRED_YC_SLOPE_3M, start, end).rename("y3m")
     except Exception:
-        y3m = pd.Series(dtype=float, name="y3m")
+        # ^IRX = 13-week T-bill discount rate (full history back to 2000). Use
+        # the SAME /10 scale as the y10 fallback so curve_slope = y10 - y3m is
+        # on a consistent scale with the correct sign (inversion < 0).
+        y3m = (_yahoo_close("^IRX", start, end) / 10.0).rename("y3m")
 
     # --- High-yield credit spread (stress gauge); optional ---
+    # FRED-only series (ICE BofA OAS). No free non-FRED equivalent, so if the
+    # FRED fetch is unavailable this stays empty and the model simply omits it
+    # (features.available() guards on notna()).
     try:
         hy_oas = _fred(config.FRED_HY_OAS, start, end).rename("hy_oas")
     except Exception:

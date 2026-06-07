@@ -30,6 +30,10 @@ def build_recommendation(signal: dict) -> dict:
         "stance": stance,
         "next_bear_prob": signal["next_bear_prob"],
         "current_regime": "Bear" if signal["current_regime"] == 1 else "Bull",
+        # Numeric 0/1 form of the hard regime label, kept distinct from the
+        # continuous probability and the 3-way stance, so the dashboard can plot
+        # the binary Bull/Bear call as its OWN layer.
+        "regime_binary": int(signal["current_regime"]),
         "fidelity_401k": playbook["fidelity_401k"],
         "thinkorswim": playbook["thinkorswim"],
         "top_drivers": list(signal.get("feature_importances", {}).items())[:5],
@@ -42,4 +46,9 @@ def build_recommendation(signal: dict) -> dict:
     if "reentry_flag" in signal:
         rec["reentry_flag"] = signal["reentry_flag"]
         rec["bear_prob_overlay"] = signal.get("bear_prob_overlay")
+    # Short-ENTRY overlay (a future, separate layer — mirror of the re-entry
+    # overlay). Passed through when the signal provides it so the dashboard and
+    # history can track it as its own signal; absent/0 until that overlay lands.
+    if "short_entry_flag" in signal:
+        rec["short_entry_flag"] = signal["short_entry_flag"]
     return rec
