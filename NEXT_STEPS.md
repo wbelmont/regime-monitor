@@ -1,6 +1,6 @@
 # Next steps & handoff notes
 
-**Last updated: 2026-06-06.** Read `README.md` first for full project + paper
+**Last updated: 2026-06-07.** Read `README.md` first for full project + paper
 context, then this file for current state and the next task.
 
 ---
@@ -77,6 +77,33 @@ is still an OPEN GAP** (the detector is slow to call tops on grinding declines).
 ---
 
 ## What's DONE (so the next chat doesn't redo it)
+
+### ✦ OPERATIONALIZED — daily iMessage digest + hosted dashboard + driver panel (2026-06-07)
+
+The signal is now a live daily tool, not just research. No CJM math changed.
+
+- **CJM driver attribution (the "why").** `pipeline.cjm_feature_drivers()`
+  decomposes the live model's bear-vs-bull lean per feature as
+  `bear_pull_i = (z_i-mu_bull_i)^2 - (z_i-mu_bear_i)^2` (sums to the exact
+  distance gap the CJM compares). Leak-free; attached to `latest_signal()` as
+  `drivers`. Surfaced in `regime update` (a "Why" table) and the dashboard.
+  Validated: COVID/GFC days show VIX/vol/MACD pushing BEAR; today pushes BULL.
+- **`regime digest`** (`notify.py`) — formats a short text + sends via **iMessage**
+  (AppleScript/osascript, macOS-only), **change-gated** (only pings on stance
+  flip, threshold cross, new re-entry confirm, or ≥15-pt 1-day move; remembers
+  yesterday in `data/notify_state.json`). Flags: `--to`, `--force`, `--dry-run`.
+- **`regime dashboard`** (`dashboard.py`) — renders a self-contained, phone-
+  friendly `reports/site/index.html` (dial, re-entry banner, 6-mo P(bear)
+  sparkline, driver table, recent calls).
+- **Delivery split (decided + deployed):** iMessage MUST run on the Mac
+  (`deploy/com.regimemonitor.digest.plist` launchd @ 9:00 AM local + `pmset`
+  wake @ 8:55 + Full Disk Access granted); the 24/7 dashboard is hosted free on
+  **GitHub Pages** via `.github/workflows/dashboard.yml` (daily, commits
+  `signal_history.csv` so the hosted sparkline accumulates). Live at
+  `https://wbelmont.github.io/regime-monitor/`.
+- **Secrets:** phone number lives in gitignored `regime/local_settings.py`
+  (config.py loads it as an override); committed `IMESSAGE_RECIPIENT=""`.
+- Notebook §15 = new-model backtest + the bear-regime/re-entry tape visual.
 
 ### ✦ Re-entry/cover-short OVERLAY added — now ENABLED (display-only) (2026-06-06)
 
@@ -178,9 +205,10 @@ roughly neutral Sharpe/DD.
 2. **Feature review for the CJM** (`REGIME_FEATURES`). Downside-deviation /
    drawdown features (Shu & Mulvey lean on these) likely help detection AND
    entry timing.
-3. **Decide whether to flip `REENTRY_OVERLAY=True`** for live use (built &
-   validated; default off). Optionally surface `bear_prob_overlay` in the
-   history CSV / chart.
+3. **(Mostly done) Re-entry overlay is live** — `REENTRY_OVERLAY=True` and now
+   surfaced in the daily digest + dashboard (display-only; doesn't alter the
+   traded `bear_prob`). Remaining option: also write `bear_prob_overlay` into the
+   history CSV / regime chart if you want it persisted there too.
 4. **(Optional) revisit allocation** (`LEVERED_WEIGHT`, weight map) — only after
    the signal/timing is locked.
 5. **(Optional) 3-state CJM** (bull/neutral/bear) for a finer dial.
