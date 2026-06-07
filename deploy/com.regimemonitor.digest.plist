@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent: runs the morning regime digest at 9:00 AM **local time**.
+  Because launchd uses the Mac's local clock, this fires at 9:00 AM ET only if
+  this Mac's timezone is set to Eastern. (Adjust the Hour below if your Mac is on
+  a different timezone but you still want 9:00 AM ET.)
+
+  Install:
+    cp deploy/com.regimemonitor.digest.plist ~/Library/LaunchAgents/
+    launchctl unload ~/Library/LaunchAgents/com.regimemonitor.digest.plist 2>/dev/null
+    launchctl load   ~/Library/LaunchAgents/com.regimemonitor.digest.plist
+  See deploy/README.md for the wake schedule + Messages automation permission.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.regimemonitor.digest</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/wbelmont/Desktop/regime-monitor/deploy/run_digest.sh</string>
+  </array>
+
+  <!-- 9:00 AM local time, every day. launchd uses the Mac's local timezone. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <!-- Don't run immediately on load; wait for the scheduled time. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- If the Mac was asleep at 9:00, run as soon as it wakes (so a missed -->
+  <!-- fire still goes out shortly after). -->
+  <key>StartInterval</key>
+  <integer>0</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/wbelmont/Desktop/regime-monitor/reports/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/wbelmont/Desktop/regime-monitor/reports/launchd.err.log</string>
+</dict>
+</plist>

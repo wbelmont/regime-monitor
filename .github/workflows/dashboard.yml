@@ -1,0 +1,69 @@
+name: Publish dashboard
+
+# Builds the static regime dashboard and publishes it to GitHub Pages.
+# This is the 24/7 phone-accessible view; it runs independently of your Mac.
+#
+# Note on timing: GitHub cron is UTC. 13:30 UTC is ~9:30 AM ET in summer (EDT)
+# and ~8:30 AM ET in winter (EST). The hosted dashboard's exact refresh minute
+# isn't critical — the time-sensitive iMessage digest runs on your Mac at 9 AM ET.
+
+on:
+  schedule:
+    - cron: "30 13 * * *" # daily, ~9:30 AM ET (EDT)
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+  push:
+    branches: [main]
+    paths:
+      - "regime/**"
+      - ".github/workflows/dashboard.yml"
+
+permissions:
+  contents: write # to commit accumulated signal_history.csv
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --frozen || uv sync
+
+      - name: Build dashboard (live data)
+        run: |
+          PYTHONPATH=. uv run python -m regime.cli dashboard
+        # `dashboard` logs today's call to data/signal_history.csv (default),
+        # which we commit below so the hosted sparkline/history accumulate.
+
+      - name: Persist accumulated history
+        run: |
+          if ! git diff --quiet -- data/signal_history.csv; then
+            git config user.name "regime-bot"
+            git config user.email "regime-bot@users.noreply.github.com"
+            git add data/signal_history.csv
+            git commit -m "chore: daily signal history [skip ci]"
+            git push
+          else
+            echo "No history change to commit."
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports/site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
