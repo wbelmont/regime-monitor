@@ -150,24 +150,26 @@ def _spark_signals(h: "pd.DataFrame | None", days: int = 180) -> str | None:
     if has_se:
         se = pd.to_numeric(d["short_entry_flag"], errors="coerce").fillna(0)
         fired = d["date"][se > 0]
-        ax.scatter(
-            fired, [1] * len(fired), marker="v", color="#dc2626", s=42
-        )
+        ax.scatter(fired, [1] * len(fired), marker="v", color="#dc2626", s=42)
         plotted = plotted or len(fired) > 0
     if has_re:
         re = pd.to_numeric(d["reentry_flag"], errors="coerce").fillna(0)
         fired = d["date"][re > 0]
-        ax.scatter(
-            fired, [0] * len(fired), marker="^", color="#16a34a", s=42
-        )
+        ax.scatter(fired, [0] * len(fired), marker="^", color="#16a34a", s=42)
         plotted = plotted or len(fired) > 0
     ax.set_ylim(-0.6, 1.6)
     ax.set_yticks([0, 1])
     ax.set_yticklabels(["Re-entry", "Short-entry"])
     if not plotted:
         ax.text(
-            0.5, 0.5, "no signals fired in this window", ha="center",
-            va="center", transform=ax.transAxes, fontsize=9, color="#9ca3af",
+            0.5,
+            0.5,
+            "no signals fired in this window",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+            fontsize=9,
+            color="#9ca3af",
         )
     return _encode(plt, fig)
 
@@ -244,14 +246,18 @@ def _history_rows(h: "pd.DataFrame | None", n: int = 12) -> str:
         scolor = _STANCE_COLOR.get(stance, "#64748b")
         regime = str(r.get("current_regime", ""))
         rcolor = _REGIME_COLOR.get(regime, "#64748b")
-        bp = pd.to_numeric(pd.Series([r.get("next_bear_prob")]), errors="coerce").iloc[0]
+        bp = pd.to_numeric(pd.Series([r.get("next_bear_prob")]), errors="coerce").iloc[
+            0
+        ]
         bp_txt = _fmt_prob(float(bp)) if pd.notna(bp) else "-"
         sigs = []
         if _num0(r.get("short_entry_flag", 0)) > 0:
             sigs.append("<span style='color:#dc2626'>short</span>")
         if _num0(r.get("reentry_flag", 0)) > 0:
             sigs.append("<span style='color:#16a34a'>re-entry</span>")
-        sig_txt = " &middot; ".join(sigs) if sigs else "<span class='sub'>&mdash;</span>"
+        sig_txt = (
+            " &middot; ".join(sigs) if sigs else "<span class='sub'>&mdash;</span>"
+        )
         date_txt = (
             str(pd.to_datetime(r["date"]).date()) if pd.notna(r.get("date")) else ""
         )
@@ -286,7 +292,8 @@ def render(
 
     # --- Layer sparklines ---
     spark_prob = _img(
-        _spark_prob(h), "Run the monitor a few days to build this.",
+        _spark_prob(h),
+        "Run the monitor a few days to build this.",
         style="margin-top:12px",
     )
     spark_regime = _img(_spark_regime(h), "Regime history will appear here.")
@@ -303,10 +310,16 @@ def render(
     se_last = _last_fired(h, "short_entry_flag")
 
     signal_rows = _signal_row(
-        "Short-entry (call the top)", se_active, se_available, se_last,
+        "Short-entry (call the top)",
+        se_active,
+        se_available,
+        se_last,
         "Get short / buy puts when a top is confirmed.",
     ) + _signal_row(
-        "Long re-entry (cover / re-enter)", re_active, re_available, re_last,
+        "Long re-entry (cover / re-enter)",
+        re_active,
+        re_available,
+        re_last,
         "Cover shorts / re-enter longs once a rebound is confirmed.",
     )
 

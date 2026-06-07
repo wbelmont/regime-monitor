@@ -64,7 +64,9 @@ def run_for(feat: pd.DataFrame, reg_cols: list[str], label: str) -> pd.Series:
     finally:
         features.REGIME_FEATURES = orig
     bp = wf["bear_prob"]
-    print(f"\n=== {label} ({len(reg_cols)} feats, OOS {bp.index.min().date()}..{bp.index.max().date()}) ===")
+    print(
+        f"\n=== {label} ({len(reg_cols)} feats, OOS {bp.index.min().date()}..{bp.index.max().date()}) ==="
+    )
     print(f"  transitions/yr: {transitions_per_year(bp):.2f}")
     print("  entry lag (days from peak to P(bear)>=0.60):")
     for name, peak in PEAKS.items():
