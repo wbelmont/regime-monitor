@@ -3,13 +3,19 @@ name: Publish dashboard
 # Builds the static regime dashboard and publishes it to GitHub Pages.
 # This is the 24/7 phone-accessible view; it runs independently of your Mac.
 #
-# Note on timing: GitHub cron is UTC. 13:30 UTC is ~9:30 AM ET in summer (EDT)
-# and ~8:30 AM ET in winter (EST). The hosted dashboard's exact refresh minute
-# isn't critical — the time-sensitive iMessage digest runs on your Mac at 9 AM ET.
+# Note on timing: GitHub cron is UTC. It runs TWICE a day so the hosted page is
+# never more than a few hours stale:
+#   * 13:30 UTC (~9:30 AM ET EDT / ~8:30 AM EST) — the morning run. This is
+#     BEFORE the US close, so its data is the PRIOR trading day's complete bar.
+#   * 21:30 UTC (~5:30 PM ET EDT / ~4:30 PM EST) — the post-close run, which
+#     picks up the CURRENT trading day's final bar. (DST shifts ET by an hour;
+#     21:30 UTC stays safely after the 4 PM ET close year-round.)
+# The time-sensitive iMessage digest still runs on your Mac at 9 AM ET.
 
 on:
   schedule:
-    - cron: "30 13 * * *" # daily, ~9:30 AM ET (EDT)
+    - cron: "30 13 * * *" # daily, ~9:30 AM ET (EDT) — prior day's close
+    - cron: "30 21 * * *" # daily, ~5:30 PM ET (EDT) — current day's close
   workflow_dispatch: {} # allow manual runs from the Actions tab
   push:
     branches: [main]

@@ -51,4 +51,12 @@ def build_recommendation(signal: dict) -> dict:
     # history can track it as its own signal; absent/0 until that overlay lands.
     if "short_entry_flag" in signal:
         rec["short_entry_flag"] = signal["short_entry_flag"]
+    # Graded short-entry FRAGILITY score (the leading early-warning) + its
+    # component attribution, plus the later-stage decline-confirmed tell.
+    if "fragility_score" in signal:
+        rec["fragility_score"] = signal["fragility_score"]
+        rec["fragility_grade"] = signal.get("fragility_grade", "none")
+        rec["fragility_drivers"] = signal.get("fragility_drivers", [])
+    if "decline_confirmed" in signal:
+        rec["decline_confirmed"] = signal["decline_confirmed"]
     return rec

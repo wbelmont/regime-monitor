@@ -40,6 +40,25 @@ FRED_HY_OAS = "BAMLH0A0HYM2"  # high-yield credit spread (stress gauge)
 FRED_YC_SLOPE_10Y = "DGS10"  # for 10y - 3m slope
 FRED_YC_SLOPE_3M = "DGS3MO"
 
+# Extra (Yahoo, all FREE) inputs for the short-entry FRAGILITY score only. These
+# are NOT fed to the CJM (the regime signal stays a pure CJM nowcast); they feed
+# a separate, display-only early-warning overlay. Cached in their own parquet so
+# the main raw-inputs lineage / backtest is untouched. Each is used as a rolling
+# z-score of its RECENT CHANGE (not its level), so slow structural drift — e.g.
+# the AI/electricity re-rating of utilities, or secular credit compression — is
+# continuously re-baselined out and only "something is shifting now" registers.
+FRAGILITY_TICKERS = {
+    "vix3m": "^VIX3M",  # 3-month VIX (term-structure vs spot VIX); from 2006
+    "vvix": "^VVIX",  # vol-of-vol (convexity/tail demand); from 2007
+    "skew": "^SKEW",  # CBOE SKEW (cost of tail puts); long history
+    "spy": "SPY",  # cap-weighted S&P (breadth/credit ratio denominators)
+    "rsp": "RSP",  # equal-weighted S&P (breadth: RSP/SPY); from 2003
+    "hyg": "HYG",  # high-yield credit ETF (credit stress); from 2007
+    "lqd": "LQD",  # investment-grade credit ETF (HYG/LQD divergence)
+    "xlp": "XLP",  # staples — CLEAN defensive-rotation tell (no AI tailwind)
+    "xlu": "XLU",  # utilities — defensive, but AI-distorted → velocity + low wt
+}
+
 # --------------------------------------------------------------------------- #
 # Model settings
 # --------------------------------------------------------------------------- #
@@ -94,6 +113,65 @@ REENTRY_REBOUND = 0.10  # fraction above trailing low to confirm a bounce
 REENTRY_LOOKBACK = 42  # trailing-low window in trading days
 REENTRY_CAP = 0.20  # cap bear_prob at this once a rebound is confirmed
 REENTRY_REQUIRE_VIX = True  # also require VIX < its 21d average (fear receding)
+
+# --------------------------------------------------------------------------- #
+# Short-ENTRY OVERLAY (display-only) — a graded FRAGILITY SCORE.
+# --------------------------------------------------------------------------- #
+# Buying protection (puts / VIX calls / raising cash) has the OPPOSITE loss
+# function from re-entry: being early is cheap (a little theta), being late is
+# expensive (implied vol has already exploded). So this overlay is NOT a mirror
+# of the re-entry confirmation gate — it is a LEADING "fragility" detector meant
+# to nudge while the market still looks calm and protection is still cheap. It
+# is allowed to fire with the S&P near all-time highs and VIX low.
+#
+# It outputs a graded 0-100% FRAGILITY SCORE (like the CJM dial) with three
+# bands — WATCH / LEAN / ACT — blended from drift-robust, leak-free components:
+#   * VIX term structure (VIX3M/VIX flattening → near-term fear bid),
+#   * VIX velocity (spot VIX rising off a low base),
+#   * VVIX (vol-of-vol; convexity/tail demand),
+#   * SKEW (cost of tail puts rising),
+#   * credit divergence (HYG/LQD weakening),
+#   * breadth narrowing (RSP/SPY weakening),
+#   * defensive rotation (XLP/SPY; XLU down-weighted + velocity-only because the
+#     AI/electricity re-rating has structurally lifted utilities).
+# EVERY component is a rolling z-score of its RECENT CHANGE (not its level), so
+# slow structural drift is continuously re-baselined out — only "shifting now"
+# registers. The score uses whatever components have data on a given date.
+#
+# DISPLAY-ONLY: never alters `bear_prob`, the stance, the allocation, the
+# backtest, or the tuner. CAVEAT: a leading signal WILL have false positives
+# (that's the point — they're cheap); treat ACT as "scale into protection",
+# not "all in".
+SHORT_ENTRY_OVERLAY = True  # master switch for the short-entry overlay
+FRAGILITY_Z_WINDOW = 252  # rolling window (trading days) for the z-scores
+FRAGILITY_K = 1.4  # logistic steepness mapping a component z-score -> 0..1
+FRAGILITY_Z0 = 0.75  # z-score at which a component sub-score crosses 0.5
+# Component weights (renormalized over whichever components have data). Tier-1
+# vol-structure/hedging tells lead; Tier-2 divergence tells confirm. XLU is
+# deliberately small (AI-distorted); XLP carries the defensive-rotation weight.
+FRAGILITY_WEIGHTS = {
+    "term_structure": 0.22,  # VIX3M/VIX flattening
+    "vix_velocity": 0.18,  # spot VIX rising
+    "vvix": 0.12,  # vol-of-vol rising
+    "skew": 0.10,  # tail-put cost rising
+    "credit": 0.16,  # HYG/LQD weakening
+    "breadth": 0.12,  # RSP/SPY weakening
+    "defensive_xlp": 0.07,  # staples bid (clean defensive tell)
+    "defensive_xlu": 0.03,  # utilities bid (AI-distorted → small, velocity-only)
+}
+# Grade thresholds on the 0..1 composite. WATCH = early heads-up; LEAN = start
+# scaling into protection; ACT = fragility is broad/elevated.
+FRAGILITY_WATCH = 0.35
+FRAGILITY_LEAN = 0.55
+FRAGILITY_ACT = 0.70
+# `short_entry_flag` (logged to history / lit on the dashboard) fires at >= LEAN.
+
+# Secondary "decline-confirmed" tell (the original drawdown trigger). This is a
+# LATER-stage confirmation (a decline is already underway), kept distinct from
+# the leading fragility score above. Surfaced as its own boolean, not the flag.
+SHORT_ENTRY_DRAWDOWN = 0.07  # fraction below trailing high = decline confirmed
+SHORT_ENTRY_LOOKBACK = 63  # trailing-high window in trading days (== drawdown_63)
+SHORT_ENTRY_REQUIRE_VIX = True  # also require VIX > its 21d average (fear rising)
 
 # --------------------------------------------------------------------------- #
 # Your personal allocation playbook (edit to match YOUR risk tolerance)

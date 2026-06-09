@@ -143,6 +143,184 @@ def reentry_overlay(
     )
 
 
+def short_entry_overlay(
+    bear_prob: pd.Series,
+    feat: pd.DataFrame,
+    *,
+    drawdown: float | None = None,
+    lookback: int | None = None,
+    require_vix: bool | None = None,
+) -> pd.DataFrame:
+    """Leak-free short-ENTRY overlay on a bear-probability series.
+
+    The mirror image of ``reentry_overlay``: where re-entry fires on a confirmed
+    rebound OFF a trailing low (time to cover/re-enter), this fires on a
+    confirmed decline FROM a trailing high (time to consider getting short /
+    buying puts / raising cash). It exists because the CJM nowcast is
+    structurally slow to call the top on grinding declines — this surfaces an
+    earlier flag from price action the nowcast lags on.
+
+    Returns a DataFrame aligned to ``bear_prob.index`` with:
+      * ``bear_prob``        — the unchanged input (the product stays pure); and
+      * ``short_entry_flag`` — bool, True on days the decline is CONFIRMED.
+
+    Confirmation (all backward-looking → no look-ahead):
+      * price (S&P) is <= ``drawdown`` BELOW its trailing ``lookback``-day high
+        (i.e. ``price / trailing_high - 1 <= -drawdown``), AND
+      * (``require_vix``) VIX > its 21-day average (fear rising).
+
+    Parameters default to ``config.SHORT_ENTRY_*``. With ``lookback == 63`` the
+    trailing-high drawdown equals the existing ``drawdown_63`` feature. This is
+    DISPLAY-ONLY: it never modifies ``bear_prob``, the stance, the allocation,
+    the backtest, or the tuner. It addresses short-ENTRY timing only.
+    """
+    drawdown = config.SHORT_ENTRY_DRAWDOWN if drawdown is None else drawdown
+    lookback = config.SHORT_ENTRY_LOOKBACK if lookback is None else lookback
+    require_vix = config.SHORT_ENTRY_REQUIRE_VIX if require_vix is None else require_vix
+
+    idx = bear_prob.index
+    price = feat["market"].reindex(idx).ffill()
+    trail_high = price.rolling(lookback, min_periods=1).max()
+    confirmed = (price / trail_high - 1.0) <= -abs(drawdown)
+    if require_vix and "vix" in feat.columns:
+        vix = feat["vix"].reindex(idx).ffill()
+        vix_ma = vix.rolling(21, min_periods=1).mean()
+        confirmed = confirmed & (vix > vix_ma)
+
+    return pd.DataFrame(
+        {
+            "bear_prob": bear_prob,
+            "short_entry_flag": confirmed.reindex(idx).fillna(False),
+        }
+    )
+
+
+def _roll_z(s: pd.Series, window: int) -> pd.Series:
+    """Trailing (leak-free) z-score of a series over `window` days.
+
+    Uses ONLY past data (rolling mean/std up to and including today), so it
+    never peeks ahead. A trailing window also continuously re-baselines slow
+    structural drift (e.g. the AI re-rating of utilities, secular credit
+    compression), so only deviations relative to the RECENT regime register.
+    """
+    mean = s.rolling(window, min_periods=max(20, window // 4)).mean()
+    std = s.rolling(window, min_periods=max(20, window // 4)).std()
+    return (s - mean) / std.replace(0.0, np.nan)
+
+
+def _logistic(z: pd.Series, k: float, z0: float) -> pd.Series:
+    """Squash a (signed) stress z-score to a 0..1 sub-score. Higher = more
+    fragile. `z0` is the z at which the sub-score crosses 0.5; `k` the
+    steepness."""
+    return pd.Series(1.0 / (1.0 + np.exp(-k * (z - z0))), index=z.index)
+
+
+def fragility_score(
+    extra: pd.DataFrame,
+    feat: pd.DataFrame,
+    *,
+    index: pd.Index | None = None,
+    window: int | None = None,
+    k: float | None = None,
+    z0: float | None = None,
+    weights: dict | None = None,
+) -> pd.DataFrame:
+    """Leak-free, drift-robust **short-entry fragility score** (0..1) + grade.
+
+    A LEADING early-warning detector for buying protection while it's still
+    cheap — the opposite loss function from the re-entry overlay. It does NOT
+    require (or use) a price drawdown, so it can read elevated with the S&P near
+    all-time highs and VIX low. Display-only: never touches `bear_prob`.
+
+    Each component is a trailing z-score of its RECENT CHANGE (5-day move,
+    z-scored over `window` days) mapped to a 0..1 stress sub-score via a
+    logistic, then weight-averaged (over whichever components have data) into a
+    composite ``fragility`` in [0, 1] and a ``grade`` of
+    ``none``/``watch``/``lean``/``act`` from the ``config.FRAGILITY_*``
+    thresholds. Returns a DataFrame indexed by ``index`` with ``fragility``,
+    ``grade``, and one column per component sub-score (for attribution).
+
+    Components (stress = the early-warning direction):
+      * term_structure — VIX3M/VIX FALLING (curve flattening; near-term fear bid)
+      * vix_velocity   — spot VIX RISING (off a low base)
+      * vvix           — VVIX RISING (vol-of-vol; convexity/tail demand)
+      * skew           — SKEW RISING (cost of tail puts)
+      * credit         — HYG/LQD FALLING (credit cracking under calm equities)
+      * breadth        — RSP/SPY FALLING (breadth narrowing)
+      * defensive_xlp  — XLP/SPY RISING (staples bid; clean defensive tell)
+      * defensive_xlu  — XLU/SPY RISING (utilities bid; AI-distorted → small wt)
+    """
+    window = config.FRAGILITY_Z_WINDOW if window is None else window
+    k = config.FRAGILITY_K if k is None else k
+    z0 = config.FRAGILITY_Z0 if z0 is None else z0
+    weights = config.FRAGILITY_WEIGHTS if weights is None else weights
+
+    idx = pd.DatetimeIndex(index) if index is not None else extra.index
+    e = extra.reindex(extra.index.union(idx)).sort_index().ffill()
+    vix = feat["vix"].reindex(e.index).ffill()
+
+    chg = 5  # measure the recent CHANGE over a trading week, then z-score it
+
+    def stress_from(raw: pd.Series, rising_is_stress: bool) -> pd.Series:
+        """5-day change of `raw`, z-scored; oriented so +z = more stress."""
+        delta = raw - raw.shift(chg)
+        z = _roll_z(delta, window)
+        return z if rising_is_stress else -z
+
+    # Build each available component as a signed stress z-score.
+    comp_z: dict[str, pd.Series] = {}
+    if "vix3m" in e:
+        ts = e["vix3m"] / vix.replace(0.0, np.nan)  # >1 calm contango
+        comp_z["term_structure"] = stress_from(ts, rising_is_stress=False)
+    comp_z["vix_velocity"] = stress_from(vix, rising_is_stress=True)
+    if "vvix" in e:
+        comp_z["vvix"] = stress_from(e["vvix"], rising_is_stress=True)
+    if "skew" in e:
+        comp_z["skew"] = stress_from(e["skew"], rising_is_stress=True)
+    if {"hyg", "lqd"}.issubset(e.columns):
+        comp_z["credit"] = stress_from(e["hyg"] / e["lqd"], rising_is_stress=False)
+    if {"rsp", "spy"}.issubset(e.columns):
+        comp_z["breadth"] = stress_from(e["rsp"] / e["spy"], rising_is_stress=False)
+    if {"xlp", "spy"}.issubset(e.columns):
+        comp_z["defensive_xlp"] = stress_from(
+            e["xlp"] / e["spy"], rising_is_stress=True
+        )
+    if {"xlu", "spy"}.issubset(e.columns):
+        comp_z["defensive_xlu"] = stress_from(
+            e["xlu"] / e["spy"], rising_is_stress=True
+        )
+
+    # Map each to a 0..1 sub-score and weight-average over available components.
+    sub = pd.DataFrame(index=e.index)
+    num = pd.Series(0.0, index=e.index)
+    den = pd.Series(0.0, index=e.index)
+    for name, z in comp_z.items():
+        s = _logistic(z, k, z0)
+        sub[name] = s
+        w = float(weights.get(name, 0.0))
+        valid = s.notna()
+        num = num.add((s.fillna(0.0) * w).where(valid, 0.0), fill_value=0.0)
+        den = den.add(pd.Series(np.where(valid, w, 0.0), index=e.index), fill_value=0.0)
+
+    fragility = (num / den.replace(0.0, np.nan)).clip(0.0, 1.0)
+
+    def grade(x: float) -> str:
+        if not np.isfinite(x):
+            return "none"
+        if x >= config.FRAGILITY_ACT:
+            return "act"
+        if x >= config.FRAGILITY_LEAN:
+            return "lean"
+        if x >= config.FRAGILITY_WATCH:
+            return "watch"
+        return "none"
+
+    out = sub.copy()
+    out["fragility"] = fragility
+    out["grade"] = fragility.map(grade)
+    return out.reindex(idx)
+
+
 def label_full_sample(
     feat: pd.DataFrame, jump_penalty: float | None = None
 ) -> pd.Series:
@@ -286,7 +464,7 @@ def walk_forward(
     return out
 
 
-def latest_signal(feat: pd.DataFrame) -> dict:
+def latest_signal(feat: pd.DataFrame, extra: pd.DataFrame | None = None) -> dict:
     """Train on ALL available history and report the *current* regime + the
     bear probability. This is what the daily/monthly monitor reports.
 
@@ -366,6 +544,48 @@ def latest_signal(feat: pd.DataFrame) -> dict:
         ov = reentry_overlay(bp_series, feat)
         out["reentry_flag"] = bool(ov["reentry_flag"].iloc[-1])
         out["bear_prob_overlay"] = float(ov["bear_prob_overlay"].iloc[-1])
+
+    # Short-ENTRY overlay (default ON; display-only) — a graded FRAGILITY SCORE.
+    # A LEADING early-warning for buying protection while it's still cheap (the
+    # opposite loss function from re-entry). Does NOT alter `next_bear_prob`.
+    if config.SHORT_ENTRY_OVERLAY:
+        last = df.index[-1]
+        bp_series = pd.Series([bear_prob], index=[last])
+
+        # Leading fragility score (uses the extra Yahoo inputs if available).
+        if extra is None:
+            try:
+                from . import data as _data
+
+                extra = _data.load_extra(refresh=False)
+            except Exception:
+                extra = None
+        if extra is not None and len(extra):
+            fr = fragility_score(extra, feat, index=df.index)
+            row = fr.loc[last]
+            out["fragility_score"] = float(row["fragility"])
+            out["fragility_grade"] = str(row["grade"])
+            # Top component sub-scores driving today's fragility (attribution).
+            comps = {
+                c: float(row[c])
+                for c in fr.columns
+                if c not in ("fragility", "grade") and pd.notna(row[c])
+            }
+            out["fragility_drivers"] = sorted(
+                comps.items(), key=lambda kv: kv[1], reverse=True
+            )
+            # The logged/dashboard flag fires once fragility reaches LEAN.
+            out["short_entry_flag"] = row["grade"] in ("lean", "act")
+        else:
+            out["fragility_score"] = None
+            out["fragility_grade"] = "none"
+            out["fragility_drivers"] = []
+            out["short_entry_flag"] = False
+
+        # Secondary, LATER-stage "decline-confirmed" tell (the price-drawdown
+        # trigger). Kept distinct from the leading score above.
+        se = short_entry_overlay(bp_series, feat)
+        out["decline_confirmed"] = bool(se["short_entry_flag"].iloc[-1])
 
     return out
 

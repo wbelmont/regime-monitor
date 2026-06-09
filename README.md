@@ -44,10 +44,10 @@ PYTHONPATH=. .venv/bin/python -m regime.cli chart --no-refresh
 
 | File | Role |
 | --- | --- |
-| `regime/data.py` | Pull/cache raw inputs (S&P 500, VIX, 10y, 3m, HY OAS). |
+| `regime/data.py` | Pull/cache raw inputs (S&P 500, VIX, 10y, 3m, HY OAS). `load_extra()` caches separate free Yahoo inputs (VIX term structure, VVIX, SKEW, credit/breadth/defensive ETFs) for the short-entry fragility score only. |
 | `regime/features.py` | Backward-looking features. `REGIME_FEATURES` feed the labeler; `PREDICTOR_FEATURES` feed the next-regime classifier. |
 | `regime/jump_model.py` | `JumpModel` (discrete) and **`ContinuousJumpModel`** (the one in use). **Do not change the model math.** |
-| `regime/pipeline.py` | `walk_forward` (leak-free OOS signal), `latest_signal` (live), `label_full_sample` (charts only). |
+| `regime/pipeline.py` | `walk_forward` (leak-free OOS signal), `latest_signal` (live), `label_full_sample` (charts only), and the display-only overlays: `reentry_overlay` + the leading `fragility_score` (short-entry). |
 | `regime/backtest.py` | Daily, continuous-weight, financing-aware backtest. |
 | `regime/tune.py` | Nested-CV jump-penalty tuner (`regime tune`). |
 | `regime/cli.py` | CLI: `update`, `backtest`, `tune`, `chart`. |

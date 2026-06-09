@@ -52,6 +52,23 @@ def _flabel(key: str) -> str:
     return FEATURE_LABELS.get(key, key)
 
 
+# Human-readable names for the short-entry fragility-score components.
+FRAGILITY_LABELS = {
+    "term_structure": "VIX term structure",
+    "vix_velocity": "VIX velocity",
+    "vvix": "Vol-of-vol (VVIX)",
+    "skew": "Tail-put cost (SKEW)",
+    "credit": "Credit (HY/IG)",
+    "breadth": "Breadth (RSP/SPY)",
+    "defensive_xlp": "Staples rotation",
+    "defensive_xlu": "Utilities rotation",
+}
+
+
+def _se_label(key: str) -> str:
+    return FRAGILITY_LABELS.get(key, key)
+
+
 def _load_features(refresh: bool) -> pd.DataFrame:
     with console.status("[bold]Loading market data..."):
         raw = data.load_raw(refresh=refresh)
@@ -85,6 +102,7 @@ def _log_history(rec: dict) -> None:
         "reentry_flag",
         "short_entry_flag",
         "bear_prob_overlay",
+        "fragility_score",
     ]
     row = {
         "date": pd.Timestamp(rec["as_of"]).date().isoformat(),
@@ -98,6 +116,11 @@ def _log_history(rec: dict) -> None:
         "bear_prob_overlay": (
             round(float(rec["bear_prob_overlay"]), 4)
             if rec.get("bear_prob_overlay") is not None
+            else ""
+        ),
+        "fragility_score": (
+            round(float(rec["fragility_score"]), 4)
+            if rec.get("fragility_score") is not None
             else ""
         ),
     }
@@ -118,8 +141,15 @@ def _log_history(rec: dict) -> None:
 
 def cmd_update(args) -> None:
     feat = _load_features(refresh=not args.no_refresh)
+    extra = None
+    if config.SHORT_ENTRY_OVERLAY:
+        try:
+            with console.status("[bold]Loading fragility inputs..."):
+                extra = data.load_extra(refresh=not args.no_refresh)
+        except Exception:
+            extra = None
     with console.status("[bold]Computing regime signal..."):
-        sig = pipeline.latest_signal(feat)
+        sig = pipeline.latest_signal(feat, extra=extra)
     rec = recommend.build_recommendation(sig)
     _log_history(rec)
 
@@ -186,6 +216,45 @@ def cmd_update(args) -> None:
         else:
             console.print(
                 "[dim]Re-entry overlay: not triggered (no confirmed rebound yet).[/]"
+            )
+
+    # Short-ENTRY overlay (config.SHORT_ENTRY_OVERLAY) — a graded FRAGILITY
+    # SCORE. A LEADING "buy protection while it's cheap" early-warning; can read
+    # elevated with the S&P near highs and VIX low. Display-only.
+    if "fragility_score" in rec and rec["fragility_score"] is not None:
+        score = float(rec["fragility_score"])
+        grade = rec.get("fragility_grade", "none")
+        gstyle = {
+            "act": (
+                "bold red",
+                "ACT",
+                "Fragility is broad/elevated — scale into protection / raise cash.",
+            ),
+            "lean": (
+                "bold yellow",
+                "LEAN",
+                "Internals are deteriorating — start "
+                "scaling into protection while it's still cheap.",
+            ),
+            "watch": (
+                "yellow",
+                "WATCH",
+                "Early signs of fragility — keep an eye out; no action needed yet.",
+            ),
+            "none": ("green", "CALM", "No meaningful fragility building."),
+        }[grade]
+        console.print(
+            f"[{gstyle[0]}]Short-entry fragility: {score:.0%} — {gstyle[1]}[/]  "
+            f"[dim]{gstyle[2]}[/]"
+        )
+        drivers = rec.get("fragility_drivers") or []
+        if drivers and grade != "none":
+            top = ", ".join(f"{_se_label(k)} ({v:.0%})" for k, v in drivers[:3])
+            console.print(f"[dim]Top fragility drivers: {top}[/]")
+        if rec.get("decline_confirmed"):
+            console.print(
+                "[dim](A price decline off the trailing high is now also "
+                "confirmed — this is the later-stage tell.)[/]"
             )
 
     console.print(

@@ -1,6 +1,6 @@
 # Next steps & handoff notes
 
-**Last updated: 2026-06-07.** Read `README.md` first for full project + paper
+**Last updated: 2026-06-08.** Read `README.md` first for full project + paper
 context, then this file for current state and the next task.
 
 ---
@@ -22,7 +22,12 @@ Cost rules: always use --no-refresh (cached data); iterate on a coarse grid /
 short CV window before any full run; ask before kicking off a ~13-min backtest;
 summarize terminal output. Don't change the CJM model math.
 
-Today's task: <FILL IN — see "Prioritized next steps" in NEXT_STEPS.md>.
+Today's task: see "PICKING UP NEXT" at the top of "Prioritized next steps" in
+NEXT_STEPS.md. The short-entry FRAGILITY SCORE (a leading early-warning overlay)
+is DONE and live. Recommended next: a full-rigor / longer-history validation of
+the fragility score (it was tuned on a coarse pass over ~6 episodes), and/or
+adding it as its own dashboard line; or the REPLACE-not-append feature-selection
+A/B for the CJM. Do NOT re-tune fragility thresholds against the same 6 episodes.
 ```
 
 ---
@@ -39,8 +44,12 @@ Decision support for a personal 401k + thinkorswim account — **not** auto-trad
   longs** — i.e. avoid covering or re-entering too early or too late.
 
 Mapping today: `bear_prob` (CJM nowcast) = the risk dial; the **re-entry overlay**
-= cover-short / re-enter timing (now enabled, display-only). **Short-ENTRY timing
-is still an OPEN GAP** (the detector is slow to call tops on grinding declines).
+= cover-short / re-enter timing (enabled, display-only); the **short-entry
+fragility score** = get-short / buy-protection timing (enabled, display-only) — a
+graded 0–100% LEADING early-warning (WATCH/LEAN/ACT) that can fire while price is
+near highs and VIX is low, because buying protection has the OPPOSITE loss
+function from re-entry (early is cheap, late is expensive). All overlays are
+independent, display-only layers; the traded `bear_prob` stays a pure CJM nowcast.
 
 ## Preferences & locked decisions (honor these)
 
@@ -73,10 +82,106 @@ is still an OPEN GAP** (the detector is slow to call tops on grinding declines).
 - Financing: `ANNUAL_CASH_YIELD = 0.0`, `ANNUAL_FINANCING_RATE = 0.10` (idle
   cash must NOT earn the borrow rate — that was a bug).
 - `REENTRY_OVERLAY = True` (display-only; separate from the pure signal).
+- `SHORT_ENTRY_OVERLAY = True` (display-only; separate from the pure signal).
+  The short-entry layer is now a graded **FRAGILITY SCORE** (0–100%, WATCH/LEAN/
+  ACT), NOT a reversed re-entry gate. It's a LEADING early-warning (no drawdown
+  gate) built from drift-robust z-scores of vol-structure + hedging-demand +
+  divergence components (see `FRAGILITY_*` in `config.py`). The old price-
+  drawdown trigger is retained only as a secondary `decline_confirmed` boolean.
+  `short_entry_flag` (logged/dashboard) fires at grade ≥ LEAN.
 
 ---
 
 ## What's DONE (so the next chat doesn't redo it)
+
+### ✦ SHORT-ENTRY redesigned as a graded FRAGILITY SCORE (2026-06-08)
+
+Replaced the first-cut short-entry overlay (a literal reverse of the re-entry
+confirmation gate) after realizing the two problems have OPPOSITE loss
+functions: for **buying protection** (puts / VIX calls / raising cash), being
+early is cheap (a little theta) and being late is expensive (implied vol already
+exploded). So the short-entry layer is now a LEADING "fragility" detector meant
+to nudge while the market still looks calm and protection is cheap — it does NOT
+require a price drawdown and can read elevated with the S&P near highs + VIX low.
+Still display-only; the CJM signal/math is untouched.
+
+- **Output:** a graded **0–100% fragility score** (like the CJM dial) with
+  **WATCH / LEAN / ACT** bands (`config.FRAGILITY_WATCH/LEAN/ACT` = 0.35/0.55/
+  0.70). `short_entry_flag` fires at grade ≥ LEAN.
+- **Components (all drift-robust):** VIX term structure (`VIX3M/VIX`), VIX
+  velocity, VVIX, SKEW, credit (`HYG/LQD`), breadth (`RSP/SPY`), defensive
+  rotation (XLP primary; **XLU down-weighted + velocity-only** because the
+  AI/electricity re-rating structurally lifted utilities — the owner's call).
+  **Every component is a trailing z-score of its RECENT CHANGE, not its level**,
+  so slow structural drift is continuously re-baselined out (the general fix for
+  the XLU concern). Each z → 0..1 via a logistic, weight-averaged over whichever
+  components have data (`config.FRAGILITY_WEIGHTS/K/Z0/Z_WINDOW`).
+- **New data:** `data.load_extra()` pulls/caches 9 free Yahoo series
+  (`^VIX3M ^VVIX ^SKEW SPY RSP HYG LQD XLP XLU`) into a SEPARATE
+  `data/cache/extra_inputs.parquet` so the CJM raw-inputs lineage / backtest is
+  untouched. (No CBOE put/call — owner's call; too fiddly for now.) History
+  depth: SKEW→1990, XLP/XLU→1998, RSP→2003, VIX3M→2006, VVIX/HYG→2007 (so all
+  six eval grinds are covered; pre-2006 just uses fewer components).
+- **Code:** `pipeline.fragility_score()` (pure, leak-free) + `_roll_z`/
+  `_logistic` helpers; `latest_signal(feat, extra=)` sets `fragility_score`,
+  `fragility_grade`, `fragility_drivers`, `short_entry_flag` (≥LEAN), and a
+  secondary `decline_confirmed` (the old drawdown trigger, kept as the
+  later-stage tell). `cli update` loads `extra` (respects `--no-refresh`) and
+  prints a graded banner + top drivers; `_log_history` adds a `fragility_score`
+  column; `recommend` passes the fields through. Dashboard renders fine.
+- **Coarse validation (cached `signals_jp50_full.parquet` + cached inputs):**
+  - **Base rate healthy** — LEAN ~5–7% of days in calm bull years (2013/17/19/
+    21/24), ACT ~1–2%; full-sample median score 0.28. Not crying wolf.
+  - **Leads on grinding tops** (the open gap): sustained LEAN fired with **VIX
+    still 14–19** in 2018 / 2020-COVID / 2025-26 (protection cheap). Honestly
+    LATE only on violent gap-downs (2015 China deval ~VIX 40, 2022 ~VIX 27) —
+    which no leading signal can front-run. Mean VIX at first sustained LEAN ≈ 23.
+  - **Stopped tuning at v1** to avoid selection-on-evaluation over 6 episodes.
+- **Live read (2026-06-08): fragility 64% → LEAN**, driven by VIX term structure
+  (96%), VIX velocity (90%), VVIX (77%) — firing while the CJM is still BULL/0%,
+  i.e. exactly the intended LEADING behavior.
+- **Caveat:** a leading signal WILL have false positives (that's the point —
+  they're cheap). Treat ACT as "scale into protection", not "all in".
+
+### ✦ SHORT-ENTRY overlay built — now ENABLED (display-only) (2026-06-07)
+
+> SUPERSEDED 2026-06-08 by the fragility score above. The price-drawdown trigger
+> below is retained only as the secondary `decline_confirmed` boolean.
+
+Mirror of the re-entry overlay, in the opposite direction: an EARLIER
+"consider getting short / buying puts / raising cash" flag for the slow
+short-ENTRY timing (the open gap). The pure CJM signal is untouched — this is
+a separate, display-only layer (does NOT change `bear_prob`, stance,
+allocation, backtest, or tuner). No CJM math changed.
+
+- **Rule (leak-free, backward-looking):** fire when the S&P is ≥
+  `SHORT_ENTRY_DRAWDOWN` BELOW its trailing `SHORT_ENTRY_LOOKBACK`-day high AND
+  (if `SHORT_ENTRY_REQUIRE_VIX`) VIX > its 21d average (fear rising). With
+  `lookback == 63` the trailing-high drawdown equals the existing `drawdown_63`
+  feature. It's the cover-short overlay run in reverse (drawdown-from-high vs
+  rebound-from-low; VIX rising vs receding).
+- **Code:** `config.SHORT_ENTRY_OVERLAY=True` plus `SHORT_ENTRY_DRAWDOWN/
+  LOOKBACK/REQUIRE_VIX`; `pipeline.short_entry_overlay()` returns `bear_prob`
+  (passthrough) and `short_entry_flag`; `latest_signal` sets `short_entry_flag`
+  when enabled; `recommend`/`cli update` print a short-entry banner. Downstream
+  wiring (`_log_history`, dashboard Signals card + timeline) was already in
+  place, so the dashboard now shows short-entry as BUILT/tracked instead of
+  "not yet built".
+- **Coarse validation (cached `signals_jp50_full.parquet` OOS bear_prob +
+  cached features; entry lag from the PEAK, lower = earlier):** the overlay
+  fires earlier than (or equal to) the raw 0.60 crossing in EVERY episode and
+  never later. At the chosen **drawdown=0.07**: mean lag-from-peak 16.0 d vs raw
+  22.8 d (**~6.8 d earlier**); big wins 2022 +22 d, 2025-26 +9 d, 2011/2018 +4 d;
+  2015-16 tie; 2020 COVID +2 d. **drawdown=0.05** is strictly better (13.2 vs
+  22.8 d, ~9.7 d earlier, never worse) but fires more often (~2.25 vs ~1.76
+  episodes/yr). **drawdown=0.10 REGRESSES** (24.3 d, later than raw on 2018) →
+  don't go that wide.
+- **Threshold decision: kept 0.07** (conservative balance — earlier than raw in
+  every case, won't cry wolf on every shallow dip given the VIX-rising gate).
+  The owner can drop to 0.05 for a more sensitive flag (it dominates on the eval
+  episodes); left at 0.07 to avoid over-fitting the threshold to 6 episodes.
+- **Caveat:** a drawdown trigger can fire on a shallow dip that recovers (a
+  false top); it's a timing aid, not a guarantee. Display-only, so no P&L risk.
 
 ### ✦ Dashboard redesigned into 3 independently-tracked layers (2026-06-07)
 
@@ -262,26 +367,42 @@ roughly neutral Sharpe/DD.
 
 > **North star:** optimize the CJM bear-probability nowcast as a daily
 > risk-tolerance dial. Judge ideas by signal quality, not just backtest P&L.
+>
+> **▶ PICKING UP NEXT (saved 2026-06-08): the short-entry FRAGILITY SCORE is
+> DONE & live (see What's DONE). Pick the next highest-value item below.**
+> Recommended next, in order:
+> **(A) Harder validation of the fragility score** — it was calibrated on a
+> COARSE pass over ~6 episodes. Without re-tuning thresholds on those same
+> episodes, sanity-check it more rigorously: per-component contribution/ablation
+> (which tells actually lead?), false-positive clustering in calm years, and
+> behavior on 2008 (partial component coverage). Consider a notebook section.
+> **(B) Surface it better** — add the fragility score as its OWN dashboard line/
+> sparkline (history CSV already logs `fragility_score`) and to the iMessage
+> digest (`notify.py`) with change-gating on grade transitions.
+> **(C) REPLACE-not-append feature selection** for the CJM (priority #2) — the
+> remaining lever on the structural short-ENTRY lag INSIDE the pure signal.
+> Coarse pass first; judge by timeliness/signal quality, not P&L; don't change
+> the CJM math. **Do NOT re-tune fragility thresholds against the same 6 grinds.**
+>
+> - **Open CI item (non-blocking):** the GitHub Pages push fix (rebase+retry) is
+>   already on `origin/main` (HEAD `31d46ba`). The earlier failure was a STALE
+>   run using the pre-fix workflow. Just trigger a fresh "Publish dashboard" run
+>   (Actions tab → Run workflow, or `gh workflow run "Publish dashboard"`).
 
-1. **Short-ENTRY timing (the open gap).** The signal is slow to call the top on
-   grinding declines (2011 97 d, 2015 92 d, 2026 56 d after the peak). NOTE
-   (2026-06-07): appending downside/drawdown/curve features to the CJM did NOT
-   help (see "What's DONE"). Best remaining bets: a **separate short-entry
-   overlay** (mirror of the re-entry overlay, fires on `drawdown_63`), or
-   REPLACE-not-append feature selection. Highest-value remaining timing work.
+1. **Short-ENTRY timing (the open gap) — FRAGILITY SCORE SHIPPED (2026-06-08).**
+   A separate, display-only, LEADING fragility score (0–100%, WATCH/LEAN/ACT)
+   now fires early on grinding tops (VIX still 14–19 in 2018/2020/2025-26) — see
+   What's DONE. The CJM nowcast itself is still structurally slow; remaining
+   ways to improve timing INSIDE the pure signal: REPLACE-not-append feature
+   selection (#2), or feature weighting. The overlay covers the decision-support
+   need in the meantime. Open work: harder validation + better surfacing (above).
 2. **Feature review for the CJM** (`REGIME_FEATURES`). `drawdown_63`,
    `downside_dev_21`, `curve_slope` now EXIST (in
    `REGIME_FEATURES_EXPERIMENTAL`); a coarse A/B showed *appending* them dilutes
    the 2-state clustering. Try REPLACE-not-append next, or feature weighting.
-3. **(Mostly done) Re-entry overlay is live** — `REENTRY_OVERLAY=True` and now
-   surfaced in the daily digest + dashboard (display-only; doesn't alter the
-   traded `bear_prob`). Remaining option: also write `bear_prob_overlay` into the
-   history CSV / regime chart if you want it persisted there too.
-4. **(Optional) revisit allocation** (`LEVERED_WEIGHT`, weight map) — only after
-   the signal/timing is locked.
-5. **(Optional) 3-state CJM** (bull/neutral/bear) for a finer dial.
-6. **HY OAS still empty** (`hy_oas` all-NaN). ROOT CAUSE FOUND & partly fixed
-   (2026-06-07): `pandas_datareader` is broken on Py3.13, so FRED pulls failed
-   silently; `data._fred` now uses `fredgraph.csv` directly. `y3m`/`curve_slope`
-   are backfilled (Yahoo `^IRX`), but `hy_oas` is FRED-only and `fredgraph.csv`
-   times out from this environment — it will populate once FRED is reachable.
+3. **(Done) Re-entry + short-entry layers are live** — `REENTRY_OVERLAY` and
+   `SHORT_ENTRY_OVERLAY` are `True` and surfaced in `cli update` + the dashboard
+   (display-only; neither alters the traded `bear_prob`). The history CSV now
+   logs `fragility_score` too. Optional polish: persist the overlays onto the
+   regime-history chart and add the fragility score to the digest/dashboard as
+   its own line.

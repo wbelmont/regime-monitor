@@ -130,3 +130,41 @@ def load_raw(refresh: bool = False) -> pd.DataFrame:
 
     df.to_parquet(cache)
     return df
+
+
+def load_extra(refresh: bool = False) -> pd.DataFrame:
+    """Return a daily DataFrame of the EXTRA Yahoo inputs for the short-entry
+    fragility score (see config.FRAGILITY_TICKERS).
+
+    Kept in a SEPARATE cache from `load_raw` so the CJM's raw-inputs lineage and
+    the backtest are untouched — these series feed only the display-only
+    early-warning overlay, never the regime model. Columns are the dict keys of
+    `config.FRAGILITY_TICKERS` (e.g. vix3m, vvix, skew, spy, rsp, hyg, lqd, xlp,
+    xlu). Any ticker that fails to download is simply omitted (the score uses
+    whatever components are available on a given date, like features.available).
+    """
+    cache = _cache_path("extra_inputs")
+    if not refresh and cache.exists():
+        # No freshness gate here: the daily job refreshes; iteration uses cache.
+        return pd.read_parquet(cache)
+
+    start, end = config.START_DATE, _today()
+    cols = {}
+    for name, ticker in config.FRAGILITY_TICKERS.items():
+        try:
+            cols[name] = _yahoo_close(ticker, start, end).rename(name)
+        except Exception:
+            # Omit a missing series rather than failing the whole pull.
+            continue
+
+    if not cols:
+        # Nothing downloaded; return cached if present, else an empty frame.
+        if cache.exists():
+            return pd.read_parquet(cache)
+        return pd.DataFrame()
+
+    df = pd.concat(cols.values(), axis=1)
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index().ffill()
+    df.to_parquet(cache)
+    return df
