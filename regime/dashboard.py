@@ -33,6 +33,35 @@ from . import config
 
 SITE_DIR = config.REPORTS_DIR / "site"
 
+# Sparklines now default to a ~2-week window (10 trading days) so day-to-day
+# moves are legible; pass a larger `days` for more context where useful.
+DEFAULT_SPARK_DAYS = 10
+
+# Dark chart palette (matches the dashboard cards so charts blend in rather than
+# sitting on a jarring white block).
+_CHART = {
+    "bg": "none",  # transparent → shows the card background through the PNG
+    "fg": "#cbd5e1",  # axis text / ticks
+    "grid": "#1f2937",  # subtle gridlines
+    "ink": "#e5e7eb",  # last-value annotation text
+    "prob": "#60a5fa",  # P(bear) line
+    "regime": "#a78bfa",  # regime step
+    "frag": "#f59e0b",  # fragility composite
+    "bull": "#34d399",
+    "bear": "#f87171",
+}
+# Distinct hues for the fragility component lines (kept color-blind-friendly-ish).
+_FRAG_COMPONENT_COLORS = {
+    "term_structure": "#f59e0b",
+    "vix_velocity": "#fb7185",
+    "vvix": "#f472b6",
+    "skew": "#c084fc",
+    "credit": "#22d3ee",
+    "breadth": "#34d399",
+    "defensive_staples": "#a3e635",
+    "defensive_xlu": "#94a3b8",
+}
+
 _STANCE_COLOR = {"BULL": "#16a34a", "NEUTRAL": "#ca8a04", "BEAR": "#dc2626"}
 _REGIME_COLOR = {"Bull": "#16a34a", "Bear": "#dc2626"}
 # Short-entry FRAGILITY overlay: grade colors + human-readable driver labels.
@@ -49,8 +78,8 @@ _FRAGILITY_LABELS = {
     "skew": "SKEW (cost of tail puts)",
     "credit": "Credit (HYG/LQD weakening)",
     "breadth": "Breadth (RSP/SPY narrowing)",
-    "defensive_xlp": "Defensive rotation (staples bid)",
-    "defensive_xlu": "Defensive rotation (utilities bid)",
+    "defensive_staples": "Defensive rotation (staples vs cyclicals)",
+    "defensive_xlu": "Defensive rotation (utilities, gated)",
 }
 _FEATURE_LABELS = {
     "mkt_ret": "Daily return",
@@ -100,60 +129,166 @@ def _dedup_daily(history: "pd.DataFrame | None") -> "pd.DataFrame | None":
 # --------------------------------------------------------------------------- #
 # Sparklines (one per layer)
 # --------------------------------------------------------------------------- #
-def _new_ax(title: str):
+def _new_ax(title: str, *, height: float = 1.7):
+    """A small, dark-themed chart that blends into the dashboard cards."""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(7, 1.6))
-    ax.margins(x=0)
-    for spine in ("top", "right"):
+    fig, ax = plt.subplots(figsize=(7, height))
+    fig.patch.set_alpha(0.0)  # transparent figure → card bg shows through
+    ax.set_facecolor(_CHART["bg"])
+    ax.margins(x=0.02)
+    for spine in ("top", "right", "left"):
         ax.spines[spine].set_visible(False)
-    ax.set_title(title, fontsize=9, loc="left")
+    ax.spines["bottom"].set_color(_CHART["grid"])
+    ax.tick_params(colors=_CHART["fg"], labelsize=8, length=0)
+    ax.grid(True, axis="y", color=_CHART["grid"], lw=0.6, alpha=0.7)
+    ax.set_axisbelow(True)
+    ax.set_title(title, fontsize=9.5, loc="left", color=_CHART["ink"], pad=8)
     return plt, fig, ax
 
 
+def _fmt_date_axis(ax, dates) -> None:
+    """Daily ticks with short labels so each day in the ~2-week window is read."""
+    import matplotlib.dates as mdates
+
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=3, maxticks=8))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%-m/%-d"))
+    for lbl in ax.get_xticklabels():
+        lbl.set_color(_CHART["fg"])
+
+
+def _annot_last(ax, x, y, text: str, color: str) -> None:
+    """Label the most-recent point so the current value is unmistakable."""
+    ax.scatter([x], [y], s=28, color=color, zorder=5, edgecolors="none")
+    ax.annotate(
+        text,
+        xy=(x, y),
+        xytext=(6, 0),
+        textcoords="offset points",
+        va="center",
+        ha="left",
+        fontsize=9,
+        fontweight="bold",
+        color=color,
+        clip_on=False,
+    )
+
+
 def _encode(plt, fig) -> str:
-    fig.tight_layout()
+    fig.tight_layout(pad=0.6)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=120)
+    fig.savefig(buf, format="png", dpi=130, transparent=True)
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _spark_prob(h: "pd.DataFrame | None", days: int = 180) -> str | None:
-    """Continuous P(bear) line with the bull/bear threshold bands."""
+def _spark_prob(h: "pd.DataFrame | None", days: int = DEFAULT_SPARK_DAYS) -> str | None:
+    """Continuous P(bear) line (last ~2 weeks) with the bull/bear bands."""
     if h is None or h.empty or "next_bear_prob" not in h.columns:
         return None
     d = h.tail(days)
-    plt, fig, ax = _new_ax("P(bear) — last 6 months (continuous risk dial)")
-    ax.plot(d["date"], d["next_bear_prob"], color="#2563eb", lw=1.6)
-    ax.axhline(config.BEAR_THRESHOLD, color="#dc2626", ls=":", lw=0.8)
-    ax.axhline(config.BULL_THRESHOLD, color="#16a34a", ls=":", lw=0.8)
+    y = pd.to_numeric(d["next_bear_prob"], errors="coerce")
+    plt, fig, ax = _new_ax("P(bear) — last 2 weeks (continuous risk dial)")
+    # Threshold bands as soft fills so the green/amber/red zones read at a glance.
+    ax.axhspan(config.BEAR_THRESHOLD, 1.03, color=_CHART["bear"], alpha=0.07)
+    ax.axhspan(config.BULL_THRESHOLD, config.BEAR_THRESHOLD,
+               color="#ca8a04", alpha=0.06)
+    ax.axhspan(-0.03, config.BULL_THRESHOLD, color=_CHART["bull"], alpha=0.06)
+    ax.plot(d["date"], y, color=_CHART["prob"], lw=2.0,
+            marker="o", ms=3.5, mfc=_CHART["prob"], mec="none")
     ax.set_ylim(-0.03, 1.03)
     ax.set_yticks([0, 0.5, 1.0])
+    ax.set_yticklabels(["0%", "50%", "100%"])
+    if y.notna().any():
+        _annot_last(ax, d["date"].iloc[-1], float(y.iloc[-1]),
+                    _fmt_prob(float(y.iloc[-1])), _CHART["prob"])
+    _fmt_date_axis(ax, d["date"])
     return _encode(plt, fig)
 
 
-def _spark_regime(h: "pd.DataFrame | None", days: int = 180) -> str | None:
-    """Binary Bull(0)/Bear(1) step line."""
+def _spark_regime(
+    h: "pd.DataFrame | None", days: int = DEFAULT_SPARK_DAYS
+) -> str | None:
+    """Binary Bull(0)/Bear(1) step line (last ~2 weeks)."""
     if h is None or h.empty or "regime_binary" not in h.columns:
         return None
     d = h.tail(days)
     reg = pd.to_numeric(d["regime_binary"], errors="coerce")
     if reg.notna().sum() == 0:
         return None
-    plt, fig, ax = _new_ax("Regime — Bull (0) / Bear (1)")
-    ax.step(d["date"], reg, where="post", color="#7c3aed", lw=1.8)
-    ax.fill_between(d["date"], 0, reg, step="post", color="#7c3aed", alpha=0.15)
+    plt, fig, ax = _new_ax("Regime — Bull (0) / Bear (1), last 2 weeks")
+    ax.step(d["date"], reg, where="post", color=_CHART["regime"], lw=2.0)
+    ax.fill_between(d["date"], 0, reg, step="post",
+                    color=_CHART["regime"], alpha=0.18)
     ax.set_ylim(-0.1, 1.1)
     ax.set_yticks([0, 1])
     ax.set_yticklabels(["Bull", "Bear"])
+    _fmt_date_axis(ax, d["date"])
     return _encode(plt, fig)
 
 
-def _spark_signals(h: "pd.DataFrame | None", days: int = 180) -> str | None:
+def _spark_fragility(
+    frag: "pd.DataFrame | None", days: int = DEFAULT_SPARK_DAYS
+) -> str | None:
+    """Dense fragility chart (last ~2 weeks): composite + top component drivers.
+
+    Unlike the other sparklines (which read the sparse logged history CSV), this
+    is computed from cached price data, so it's rich on day one and lets you
+    watch each early-warning tell move day to day. `frag` is the DataFrame from
+    `pipeline.fragility_score()` (composite ``fragility`` + per-component
+    sub-scores). Display-only.
+    """
+    if frag is None or len(frag) == 0 or "fragility" not in frag.columns:
+        return None
+    d = frag.tail(days)
+    comp = float(pd.to_numeric(d["fragility"], errors="coerce").iloc[-1])
+    plt, fig, ax = _new_ax(
+        "Fragility — composite & drivers (last 2 weeks)", height=2.2
+    )
+    # Threshold bands (WATCH/LEAN/ACT) as soft horizontal zones.
+    ax.axhspan(config.FRAGILITY_ACT, 1.0, color=_CHART["bear"], alpha=0.08)
+    ax.axhspan(config.FRAGILITY_LEAN, config.FRAGILITY_ACT,
+               color="#ea580c", alpha=0.07)
+    ax.axhspan(config.FRAGILITY_WATCH, config.FRAGILITY_LEAN,
+               color="#ca8a04", alpha=0.06)
+    # Component lines: the most-active ones (highest latest sub-score) on top.
+    comp_cols = [
+        c for c in frag.columns
+        if c not in ("fragility", "grade") and pd.to_numeric(d[c], errors="coerce").notna().any()
+    ]
+    comp_cols.sort(
+        key=lambda c: float(pd.to_numeric(d[c], errors="coerce").iloc[-1] or 0),
+        reverse=True,
+    )
+    for c in comp_cols:
+        ys = pd.to_numeric(d[c], errors="coerce")
+        ax.plot(d.index, ys, lw=1.1, alpha=0.65,
+                color=_FRAG_COMPONENT_COLORS.get(c, "#94a3b8"),
+                label=_FRAGILITY_LABELS.get(c, c).split(" (")[0])
+    # Composite on top, bold, with the current value labeled.
+    ax.plot(d.index, pd.to_numeric(d["fragility"], errors="coerce"),
+            color=_CHART["frag"], lw=2.6, marker="o", ms=3.5, mec="none",
+            label="Composite", zorder=6)
+    _annot_last(ax, d.index[-1], comp, f"{comp * 100:.0f}%", _CHART["frag"])
+    ax.set_ylim(0, 1.0)
+    ax.set_yticks([0, config.FRAGILITY_WATCH, config.FRAGILITY_LEAN,
+                   config.FRAGILITY_ACT, 1.0])
+    ax.set_yticklabels(["0", "WATCH", "LEAN", "ACT", "1"])
+    _fmt_date_axis(ax, d.index)
+    leg = ax.legend(loc="upper left", ncol=2, fontsize=7, frameon=False,
+                    labelcolor=_CHART["fg"], handlelength=1.2,
+                    columnspacing=1.0, borderaxespad=0.2)
+    for t in leg.get_texts():
+        t.set_color(_CHART["fg"])
+    return _encode(plt, fig)
+
+
+def _spark_signals(
+    h: "pd.DataFrame | None", days: int = DEFAULT_SPARK_DAYS
+) -> str | None:
     """Event timeline: markers when the short-entry / re-entry overlays fire."""
     if h is None or h.empty:
         return None
@@ -162,26 +297,29 @@ def _spark_signals(h: "pd.DataFrame | None", days: int = 180) -> str | None:
     if not (has_re or has_se):
         return None
     d = h.tail(days)
-    plt, fig, ax = _new_ax("Signals — short-entry & long re-entry events")
+    plt, fig, ax = _new_ax("Overlay events — last 2 weeks")
     plotted = False
     if has_se:
         se = pd.to_numeric(d["short_entry_flag"], errors="coerce").fillna(0)
         fired = d["date"][se > 0]
-        ax.scatter(fired, [1] * len(fired), marker="v", color="#dc2626", s=42)
+        ax.scatter(fired, [1] * len(fired), marker="v",
+                   color=_CHART["bear"], s=60, zorder=5)
         plotted = plotted or len(fired) > 0
     if has_re:
         re = pd.to_numeric(d["reentry_flag"], errors="coerce").fillna(0)
         fired = d["date"][re > 0]
-        ax.scatter(fired, [0] * len(fired), marker="^", color="#16a34a", s=42)
+        ax.scatter(fired, [0] * len(fired), marker="^",
+                   color=_CHART["bull"], s=60, zorder=5)
         plotted = plotted or len(fired) > 0
     ax.set_ylim(-0.6, 1.6)
     ax.set_yticks([0, 1])
     ax.set_yticklabels(["Re-entry", "Short-entry"])
+    _fmt_date_axis(ax, d["date"])
     if not plotted:
         ax.text(
             0.5,
             0.5,
-            "no signals fired in this window",
+            "no overlay events in this window",
             ha="center",
             va="center",
             transform=ax.transAxes,
@@ -234,7 +372,7 @@ def _num0(value) -> float:
     return 0.0 if pd.isna(n) else float(n)
 
 
-def _fragility_card(rec: dict) -> str:
+def _fragility_card(rec: dict, frag: "pd.DataFrame | None" = None) -> str:
     """Dedicated card for the LEADING short-entry FRAGILITY score (0-100%).
 
     Graded WATCH / LEAN / ACT against the ``config.FRAGILITY_*`` thresholds, with
@@ -307,6 +445,7 @@ def _fragility_card(rec: dict) -> str:
   <div class="card dial">
     <h2 style="text-align:left">Short-entry fragility &middot; leading early-warning</h2>
     {body}
+    {_img(_spark_fragility(frag), "Fragility history will appear here.", style="margin-top:12px")}
     <div class="sub" style="margin-top:10px;text-align:left">A LEADING gauge for
       buying protection while it's still cheap — the opposite loss function from
       re-entry, so it can read elevated with stocks near highs and VIX low. Each
@@ -374,9 +513,18 @@ def _history_rows(h: "pd.DataFrame | None", n: int = 12) -> str:
 # Render
 # --------------------------------------------------------------------------- #
 def render(
-    rec: dict, history: pd.DataFrame | None = None, filename: str = "index.html"
+    rec: dict,
+    history: pd.DataFrame | None = None,
+    filename: str = "index.html",
+    fragility: pd.DataFrame | None = None,
 ) -> str:
-    """Write the dashboard HTML and return its path."""
+    """Write the dashboard HTML and return its path.
+
+    `fragility` (optional) is the dense per-day fragility series from
+    `pipeline.fragility_score()` — used for the rich fragility chart. When
+    omitted, the fragility card still renders (gauge + drivers), just without
+    the time-series chart.
+    """
     SITE_DIR.mkdir(parents=True, exist_ok=True)
     h = _dedup_daily(history)
 
@@ -430,7 +578,7 @@ def render(
             "shorts / re-entering longs.</div></div>"
         )
 
-    fragility_card = _fragility_card(rec)
+    fragility_card = _fragility_card(rec, fragility)
 
     doc = f"""<!doctype html>
 <html lang="en">
@@ -439,20 +587,27 @@ def render(
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta http-equiv="refresh" content="3600"/>
 <title>Regime Monitor — P(bear) {_fmt_prob(bp)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&display=swap" rel="stylesheet"/>
 <style>
   :root {{ color-scheme: light dark; }}
   * {{ box-sizing: border-box; }}
-  body {{ font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
-          margin: 0; padding: 16px; background: #0b1020; color: #e5e7eb; }}
+  body {{ font-family: 'Lato', -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
+          margin: 0; padding: 18px; background: #0b1020; color: #e5e7eb;
+          -webkit-font-smoothing: antialiased; letter-spacing: .1px; }}
   .wrap {{ max-width: 720px; margin: 0 auto; }}
   .card {{ background: #111827; border: 1px solid #1f2937; border-radius: 16px;
-           padding: 18px; margin-bottom: 14px; }}
+           padding: 18px; margin-bottom: 14px;
+           box-shadow: 0 1px 2px rgba(0,0,0,.35); }}
   .dial {{ text-align: center; }}
-  .prob {{ font-size: 60px; font-weight: 800; margin: 2px 0; color: #2563eb; }}
-  .label {{ font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
-            color: #9ca3af; }}
+  .prob {{ font-size: 60px; font-weight: 900; margin: 2px 0; color: #2563eb;
+           font-variant-numeric: tabular-nums; line-height: 1.05; }}
+  .label {{ font-size: 12px; text-transform: uppercase; letter-spacing: .12em;
+            color: #9ca3b8; }}
   .chip {{ display: inline-block; padding: 3px 12px; border-radius: 999px;
-           font-weight: 700; font-size: 13px; margin-top: 6px; }}
+           font-weight: 700; font-size: 13px; margin-top: 6px;
+           letter-spacing: .04em; }}
   .gauge {{ position: relative; height: 12px; border-radius: 999px; margin: 14px 0 6px;
             background: linear-gradient(90deg,#16a34a 0%,#16a34a 40%,#ca8a04 40%,
             #ca8a04 60%,#dc2626 60%,#dc2626 100%); }}
@@ -460,18 +615,20 @@ def render(
              background: #e5e7eb; border-radius: 2px; box-shadow: 0 0 0 2px #0b1020; }}
   .gauge-scale {{ display: flex; justify-content: space-between; font-size: 11px;
                   color: #6b7280; }}
-  .regime-badge {{ font-size: 30px; font-weight: 800; }}
-  .sub {{ color: #9ca3af; font-size: 13px; }}
-  .banner {{ padding: 10px 12px; border-radius: 10px; font-weight: 600; }}
+  .regime-badge {{ font-size: 30px; font-weight: 900; }}
+  .sub {{ color: #9ca3b8; font-size: 13px; line-height: 1.5; }}
+  .banner {{ padding: 10px 12px; border-radius: 10px; font-weight: 700; }}
   .banner.ok {{ background: #064e3b; color: #d1fae5; }}
-  h2 {{ font-size: 14px; text-transform: uppercase; letter-spacing: .06em;
-        color: #9ca3af; margin: 0 0 10px; }}
+  h2 {{ font-size: 13px; text-transform: uppercase; letter-spacing: .1em;
+        font-weight: 700; color: #9ca3b8; margin: 0 0 10px; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
   td, th {{ padding: 7px 6px; border-bottom: 1px solid #1f2937; text-align: left;
             vertical-align: top; }}
+  th {{ font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+        color: #6b7280; font-weight: 700; }}
   td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  .spark {{ width: 100%; border-radius: 10px; background: #fff; margin-top: 4px; }}
-  .actions td:first-child {{ color: #9ca3af; width: 96px; }}
+  .spark {{ width: 100%; margin-top: 4px; background: transparent; }}
+  .actions td:first-child {{ color: #9ca3b8; width: 96px; }}
   .foot {{ color: #6b7280; font-size: 12px; text-align: center; margin-top: 18px; }}
 </style>
 </head>
@@ -480,7 +637,7 @@ def render(
 
   <div class="card dial">
     <div class="label">Probability of bear regime &middot; the risk dial</div>
-    <div class="prob">{_fmt_prob(bp)}</div>
+    <div class="prob>{_fmt_prob(bp)}</div>
     <div class="gauge"><div class="needle" style="left:calc({bp_pct:.1f}% - 1.5px)"></div></div>
     <div class="gauge-scale"><span>0% risk-on</span><span>50%</span><span>100% risk-off</span></div>
     <div class="chip" style="background:{scolor}22;color:{scolor}">Stance: {stance}</div>

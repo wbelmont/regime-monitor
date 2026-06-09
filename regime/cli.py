@@ -60,8 +60,8 @@ FRAGILITY_LABELS = {
     "skew": "Tail-put cost (SKEW)",
     "credit": "Credit (HY/IG)",
     "breadth": "Breadth (RSP/SPY)",
-    "defensive_xlp": "Staples rotation",
-    "defensive_xlu": "Utilities rotation",
+    "defensive_staples": "Staples rotation (XLP/XLY)",
+    "defensive_xlu": "Utilities rotation (gated)",
 }
 
 
@@ -351,13 +351,25 @@ def cmd_digest(args) -> None:
 def cmd_dashboard(args) -> None:
     """Render the static, phone-friendly dashboard into reports/site/."""
     feat = _load_features(refresh=not args.no_refresh)
+    extra = None
+    try:
+        extra = data.load_extra(refresh=not args.no_refresh)
+    except Exception:
+        extra = None
     with console.status("[bold]Computing regime signal..."):
-        sig = pipeline.latest_signal(feat)
+        sig = pipeline.latest_signal(feat, extra=extra)
     rec = recommend.build_recommendation(sig)
     if not args.no_log:
         _log_history(rec)
     history = dashboard.load_history()
-    path = dashboard.render(rec, history)
+    # Dense per-day fragility series (composite + components) for the rich chart.
+    fragility = None
+    if extra is not None and len(extra):
+        try:
+            fragility = pipeline.fragility_score(extra, feat, index=feat.index)
+        except Exception:
+            fragility = None
+    path = dashboard.render(rec, history, fragility=fragility)
     console.print(f"[green]Wrote dashboard ->[/] {path}")
     console.print(
         "[dim]Open it on your phone, sync to iCloud, or publish via GitHub Pages.[/]"

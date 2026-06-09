@@ -247,8 +247,10 @@ def fragility_score(
       * skew           — SKEW RISING (cost of tail puts)
       * credit         — HYG/LQD FALLING (credit cracking under calm equities)
       * breadth        — RSP/SPY FALLING (breadth narrowing)
-      * defensive_xlp  — XLP/SPY RISING (staples bid; clean defensive tell)
-      * defensive_xlu  — XLU/SPY RISING (utilities bid; AI-distorted → small wt)
+      * defensive_staples — XLP/XLY RISING (staples vs discretionary; clean,
+                            beta-neutral, AI-immune defensive-rotation tell)
+      * defensive_xlu  — XLU/SPY RISING, GATED by staples (utilities are bid for
+                         AI power demand, so only count them when staples confirm)
     """
     window = config.FRAGILITY_Z_WINDOW if window is None else window
     k = config.FRAGILITY_K if k is None else k
@@ -281,8 +283,20 @@ def fragility_score(
         comp_z["credit"] = stress_from(e["hyg"] / e["lqd"], rising_is_stress=False)
     if {"rsp", "spy"}.issubset(e.columns):
         comp_z["breadth"] = stress_from(e["rsp"] / e["spy"], rising_is_stress=False)
-    if {"xlp", "spy"}.issubset(e.columns):
-        comp_z["defensive_xlp"] = stress_from(
+    # Defensive rotation (the AI-aware design — "candidate C"). Measure staples
+    # rotation BETA-NEUTRALLY as XLP/XLY (staples vs consumer discretionary):
+    # both are consumer sectors with similar market beta, so the ratio cancels
+    # broad beta AND is immune to the AI/mega-cap distortion that contaminates
+    # XLP/SPY (SPY is now ~1/3 AI-levered mega-cap). Utilities (XLU) are kept
+    # but GATED: because utilities are now bid for a RISK-ON reason (AI/data-
+    # center power demand), an XLU-only pop is NOT a fear signal — so its
+    # sub-score only counts to the extent staples ALSO rotate defensive.
+    if {"xlp", "xly"}.issubset(e.columns):
+        comp_z["defensive_staples"] = stress_from(
+            e["xlp"] / e["xly"], rising_is_stress=True
+        )
+    elif {"xlp", "spy"}.issubset(e.columns):  # fallback if XLY unavailable
+        comp_z["defensive_staples"] = stress_from(
             e["xlp"] / e["spy"], rising_is_stress=True
         )
     if {"xlu", "spy"}.issubset(e.columns):
@@ -290,13 +304,19 @@ def fragility_score(
             e["xlu"] / e["spy"], rising_is_stress=True
         )
 
-    # Map each to a 0..1 sub-score and weight-average over available components.
+    # Map each to a 0..1 sub-score (compute ALL first so the XLU gate can read
+    # the staples sub-score), then weight-average over available components.
     sub = pd.DataFrame(index=e.index)
+    for name, z in comp_z.items():
+        sub[name] = _logistic(z, k, z0)
+    # XLU gate: utilities only contribute when staples confirm the rotation.
+    if "defensive_xlu" in sub.columns and "defensive_staples" in sub.columns:
+        sub["defensive_xlu"] = sub["defensive_xlu"] * sub["defensive_staples"]
+
     num = pd.Series(0.0, index=e.index)
     den = pd.Series(0.0, index=e.index)
-    for name, z in comp_z.items():
-        s = _logistic(z, k, z0)
-        sub[name] = s
+    for name in sub.columns:
+        s = sub[name]
         w = float(weights.get(name, 0.0))
         valid = s.notna()
         num = num.add((s.fillna(0.0) * w).where(valid, 0.0), fill_value=0.0)

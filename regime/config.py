@@ -57,6 +57,8 @@ FRAGILITY_TICKERS = {
     "lqd": "LQD",  # investment-grade credit ETF (HYG/LQD divergence)
     "xlp": "XLP",  # staples — CLEAN defensive-rotation tell (no AI tailwind)
     "xlu": "XLU",  # utilities — defensive, but AI-distorted → velocity + low wt
+    "xly": "XLY",  # consumer discretionary — CYCLICAL anchor (XLP/XLY = clean,
+    #               beta-neutral risk-on/off rotation; from 1998)
 }
 
 # --------------------------------------------------------------------------- #
@@ -147,8 +149,10 @@ FRAGILITY_Z_WINDOW = 252  # rolling window (trading days) for the z-scores
 FRAGILITY_K = 1.4  # logistic steepness mapping a component z-score -> 0..1
 FRAGILITY_Z0 = 0.75  # z-score at which a component sub-score crosses 0.5
 # Component weights (renormalized over whichever components have data). Tier-1
-# vol-structure/hedging tells lead; Tier-2 divergence tells confirm. XLU is
-# deliberately small (AI-distorted); XLP carries the defensive-rotation weight.
+# vol-structure/hedging tells lead; Tier-2 divergence tells confirm. Defensive
+# rotation is measured BETA-NEUTRALLY as XLP/XLY (staples vs discretionary), and
+# XLU is gated by staples confirmation (it's AI-distorted, so it only counts
+# when staples corroborate) — see pipeline.fragility_score.
 FRAGILITY_WEIGHTS = {
     "term_structure": 0.22,  # VIX3M/VIX flattening
     "vix_velocity": 0.18,  # spot VIX rising
@@ -156,8 +160,8 @@ FRAGILITY_WEIGHTS = {
     "skew": 0.10,  # tail-put cost rising
     "credit": 0.16,  # HYG/LQD weakening
     "breadth": 0.12,  # RSP/SPY weakening
-    "defensive_xlp": 0.07,  # staples bid (clean defensive tell)
-    "defensive_xlu": 0.03,  # utilities bid (AI-distorted → small, velocity-only)
+    "defensive_staples": 0.07,  # XLP/XLY rotation (clean, beta-neutral tell)
+    "defensive_xlu": 0.03,  # utilities bid, GATED by staples (AI-distorted)
 }
 # Grade thresholds on the 0..1 composite. WATCH = early heads-up; LEAN = start
 # scaling into protection; ACT = fragility is broad/elevated.
