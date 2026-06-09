@@ -279,6 +279,11 @@ def fragility_score(
         comp_z["vvix"] = stress_from(e["vvix"], rising_is_stress=True)
     if "skew" in e:
         comp_z["skew"] = stress_from(e["skew"], rising_is_stress=True)
+    if "move" in e:
+        # Bond-market implied vol (MOVE). Rising = rates/credit stress, which
+        # often LEADS equity vol (the rates structure cracks first). Horse-race:
+        # +18d lead on the 2007 GFC, no false-positive cost, hit rate intact.
+        comp_z["bond_vol"] = stress_from(e["move"], rising_is_stress=True)
     if {"hyg", "lqd"}.issubset(e.columns):
         comp_z["credit"] = stress_from(e["hyg"] / e["lqd"], rising_is_stress=False)
     if {"rsp", "spy"}.issubset(e.columns):

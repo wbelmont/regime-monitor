@@ -56,6 +56,7 @@ _FRAG_COMPONENT_COLORS = {
     "vix_velocity": "#fb7185",
     "vvix": "#f472b6",
     "skew": "#c084fc",
+    "bond_vol": "#38bdf8",
     "credit": "#22d3ee",
     "breadth": "#34d399",
     "defensive_staples": "#a3e635",

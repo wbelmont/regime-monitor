@@ -59,6 +59,9 @@ FRAGILITY_TICKERS = {
     "xlu": "XLU",  # utilities — defensive, but AI-distorted → velocity + low wt
     "xly": "XLY",  # consumer discretionary — CYCLICAL anchor (XLP/XLY = clean,
     #               beta-neutral risk-on/off rotation; from 1998)
+    "move": "^MOVE",  # ICE BofA MOVE — bond-market implied vol; LEADS equity
+    #                  vol on rates/credit-led stress (e.g. +18d lead on '07 GFC
+    #                  in the horse-race). Rising = stress. From 2002.
 }
 
 # --------------------------------------------------------------------------- #
@@ -158,6 +161,7 @@ FRAGILITY_WEIGHTS = {
     "vix_velocity": 0.18,  # spot VIX rising
     "vvix": 0.12,  # vol-of-vol rising
     "skew": 0.10,  # tail-put cost rising
+    "bond_vol": 0.10,  # MOVE rising — bond-market vol (leads on rates/credit stress)
     "credit": 0.16,  # HYG/LQD weakening
     "breadth": 0.12,  # RSP/SPY weakening
     "defensive_staples": 0.07,  # XLP/XLY rotation (clean, beta-neutral tell)
