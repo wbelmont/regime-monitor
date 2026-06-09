@@ -1,7 +1,8 @@
 # Next steps & handoff notes
 
-**Last updated: 2026-06-08.** Read `README.md` first for full project + paper
-context, then this file for current state and the next task.
+**Last updated: 2026-06-08 (PM session: shipped the fragility dashboard line +
+post-close CI run; see What's DONE).** Read `README.md` first for full project +
+paper context, then this file for current state and the next task.
 
 ---
 
@@ -24,9 +25,11 @@ summarize terminal output. Don't change the CJM model math.
 
 Today's task: see "PICKING UP NEXT" at the top of "Prioritized next steps" in
 NEXT_STEPS.md. The short-entry FRAGILITY SCORE (a leading early-warning overlay)
-is DONE and live. Recommended next: a full-rigor / longer-history validation of
-the fragility score (it was tuned on a coarse pass over ~6 episodes), and/or
-adding it as its own dashboard line; or the REPLACE-not-append feature-selection
+is DONE, live, and now SURFACED as its own graded card on the hosted dashboard.
+Recommended next: (A) a harder / longer-history validation of the fragility
+score (it was tuned on a coarse pass over ~6 episodes) — per-component ablation,
+false-positive clustering, 2008 behavior. Other options: add the fragility grade
+to the iMessage digest (notify.py), or the REPLACE-not-append feature-selection
 A/B for the CJM. Do NOT re-tune fragility thresholds against the same 6 episodes.
 ```
 
@@ -74,6 +77,22 @@ independent, display-only layers; the traded `bear_prob` stays a pure CJM nowcas
   hung" at 45 min — it was real, just slow).
 - Summarize terminal output; read only the few relevant files; one fresh chat
   per task (paste the resume prompt above).
+
+**Operational guardrails (avoid hangs) — learned the hard way**
+
+- **Every network call MUST carry an explicit timeout.** A blocking read with no
+  timeout will hang the whole session if the remote stalls (this bit us polling
+  the live Pages site). Use `curl --max-time 15 --retry 2 …`, and in Python
+  `urllib.request.urlopen(url, timeout=15)` — never a bare `urlopen`/`curl`.
+- **Poll with a bounded loop, not an open-ended one** (cap attempts AND a total
+  deadline; print progress; exit non-zero if unreachable). No infinite `while`.
+- **Long jobs run in the BACKGROUND**, never as a foreground blocking call:
+  write per-step progress to `reports/*.log` and poll the log/terminal output.
+  (Distinct from a real slow job like the ~13-min backtest — that's not a hang,
+  it's just slow; still background it.)
+- **Distinguish the two "hang" classes** when one happens: (1) a stalled network
+  read with no timeout (avoidable — add a timeout/retry), vs (2) legitimately
+  long compute (background + log). Don't treat #2 as broken.
 
 **Decisions locked in this work (don't relitigate without reason)**
 
@@ -332,17 +351,33 @@ cash earns `ANNUAL_CASH_YIELD=0%` (config). This flipped the headline read (the
 old "beats B&H" was the cash tailwind). Look-ahead audited clean (`.shift(1)` +
 contemporaneous `bear_prob`, one-step-ahead label target — no leak).
 
-### ✦ Earlier scaffolding (still valid)
+### ✦ Fragility dashboard line + post-close CI run + pushed the overlay (2026-06-08 PM)
 
-1. **`regime tune`** — nested-CV jump-penalty tuner (`tune.py`, in `cli.py`).
-   Leak-free, nested (select vs held-out eval span, `eval_frac=0.30`),
-   `--select-by sharpe|jumps`. *Note:* it scores on the OVERLAY; for
-   signal-first tuning use the notebook harness instead.
-2. **`backtest.py`** — daily, vectorized, continuous piecewise weight from
-   `bear_prob` (`<0.20→1.5`; `0.20–0.80→lin 1→0`; `>0.80→0`), trades on prior
-   day's weight (`.shift(1)`), asymmetric financing.
-3. **Config path** fixed (`PROJECT_ROOT = parents[1]`).
-4. **`performance_analysis.ipynb`** — the live research harness (§8–14).
+Surfacing item (B) is partly done; the fragility overlay is now actually LIVE on
+the hosted dashboard (it had only ever existed in the local working tree before
+this session — uncommitted/unpushed, so the hosted page still said "short-entry
+not yet built"). No CJM math changed.
+
+- **Pushed the fragility work** (`config/data/pipeline/recommend/cli` + docs +
+  `scripts/_probe_fragility.py`) to `origin/main`. The hosted Short-entry overlay
+  row flipped from "not yet built" → real armed/fired state.
+- **Graded fragility CARD on the dashboard** (`dashboard._fragility_card`): its
+  own 0–100% card with a WATCH/LEAN/ACT **banded gauge** (bands from
+  `config.FRAGILITY_*`), a grade chip, and the **top component drivers** (VIX
+  term structure, VIX velocity, VVIX, SKEW, credit, breadth, defensive). Graceful
+  "inputs unavailable" state. Display-only; never touches the risk dial. Verified
+  live on `https://wbelmont.github.io/regime-monitor/`.
+- **Post-close hosted refresh (CI fix for the stale-date confusion):** added a
+  SECOND daily cron to `.github/workflows/dashboard.yml` at **21:30 UTC (~5:30 PM
+  ET, after the close)** alongside the morning 13:30 UTC run. Root cause of "the
+  dashboard still says 06-05 after the close": the only run was at ~9:30 AM ET
+  (BEFORE the close), so it always showed the prior trading day; it also never
+  re-ran post-close. Two runs/day now keeps the hosted "As of" current-day by
+  evening. (The time-sensitive iMessage digest still runs on the Mac at 9 AM ET.)
+- **Process lesson captured** as "Operational guardrails (avoid hangs)" above:
+  a bare `urllib.urlopen`/`curl` with no timeout hung the session while polling
+  the live page — all network calls now require explicit timeouts + bounded
+  loops; long jobs go to the background.
 
 ---
 
@@ -368,41 +403,29 @@ roughly neutral Sharpe/DD.
 > **North star:** optimize the CJM bear-probability nowcast as a daily
 > risk-tolerance dial. Judge ideas by signal quality, not just backtest P&L.
 >
-> **▶ PICKING UP NEXT (saved 2026-06-08): the short-entry FRAGILITY SCORE is
-> DONE & live (see What's DONE). Pick the next highest-value item below.**
-> Recommended next, in order:
+> **▶ PICKING UP NEXT (saved 2026-06-08 PM): the fragility SCORE is DONE & live,
+> and is now SURFACED on the hosted dashboard as its own graded card (see What's
+> DONE). Recommended next, in order:**
 > **(A) Harder validation of the fragility score** — it was calibrated on a
 > COARSE pass over ~6 episodes. Without re-tuning thresholds on those same
 > episodes, sanity-check it more rigorously: per-component contribution/ablation
 > (which tells actually lead?), false-positive clustering in calm years, and
 > behavior on 2008 (partial component coverage). Consider a notebook section.
-> **(B) Surface it better** — add the fragility score as its OWN dashboard line/
-> sparkline (history CSV already logs `fragility_score`) and to the iMessage
-> digest (`notify.py`) with change-gating on grade transitions.
+> **This is the recommended next task.**
+> **(B) Surface it better — dashboard card DONE; digest REMAINS.** The graded
+> fragility card (gauge + grade + drivers) is live. Still open: add the fragility
+> grade to the iMessage digest (`notify.py`) with change-gating on grade
+> transitions (WATCH→LEAN→ACT), and optionally a fragility sparkline on the
+> dashboard (history CSV already logs `fragility_score`).
 > **(C) REPLACE-not-append feature selection** for the CJM (priority #2) — the
 > remaining lever on the structural short-ENTRY lag INSIDE the pure signal.
 > Coarse pass first; judge by timeliness/signal quality, not P&L; don't change
 > the CJM math. **Do NOT re-tune fragility thresholds against the same 6 grinds.**
 >
-> - **Open CI item (non-blocking):** the GitHub Pages push fix (rebase+retry) is
->   already on `origin/main` (HEAD `31d46ba`). The earlier failure was a STALE
->   run using the pre-fix workflow. Just trigger a fresh "Publish dashboard" run
->   (Actions tab → Run workflow, or `gh workflow run "Publish dashboard"`).
-
-1. **Short-ENTRY timing (the open gap) — FRAGILITY SCORE SHIPPED (2026-06-08).**
-   A separate, display-only, LEADING fragility score (0–100%, WATCH/LEAN/ACT)
-   now fires early on grinding tops (VIX still 14–19 in 2018/2020/2025-26) — see
-   What's DONE. The CJM nowcast itself is still structurally slow; remaining
-   ways to improve timing INSIDE the pure signal: REPLACE-not-append feature
-   selection (#2), or feature weighting. The overlay covers the decision-support
-   need in the meantime. Open work: harder validation + better surfacing (above).
-2. **Feature review for the CJM** (`REGIME_FEATURES`). `drawdown_63`,
-   `downside_dev_21`, `curve_slope` now EXIST (in
-   `REGIME_FEATURES_EXPERIMENTAL`); a coarse A/B showed *appending* them dilutes
-   the 2-state clustering. Try REPLACE-not-append next, or feature weighting.
-3. **(Done) Re-entry + short-entry layers are live** — `REENTRY_OVERLAY` and
-   `SHORT_ENTRY_OVERLAY` are `True` and surfaced in `cli update` + the dashboard
-   (display-only; neither alters the traded `bear_prob`). The history CSV now
-   logs `fragility_score` too. Optional polish: persist the overlays onto the
-   regime-history chart and add the fragility score to the digest/dashboard as
-   its own line.
+> - **Hosted dashboard / CI: healthy.** The Pages workflow now runs TWICE daily
+>   (13:30 + 21:30 UTC) with the rebase+retry push fix; verified deploying
+>   (fragility card live). If a push is rejected by a `regime-bot` history commit,
+>   rebase onto `origin/main` (the only conflict is `data/signal_history.csv` —
+>   take the remote's version; the next run re-appends). NOTE: `gh` CLI is NOT
+>   installed locally, so inspect runs via the Actions tab or the live page's
+>   `last-modified` header (curl `--max-time 15`), not `gh`.
