@@ -35,6 +35,23 @@ SITE_DIR = config.REPORTS_DIR / "site"
 
 _STANCE_COLOR = {"BULL": "#16a34a", "NEUTRAL": "#ca8a04", "BEAR": "#dc2626"}
 _REGIME_COLOR = {"Bull": "#16a34a", "Bear": "#dc2626"}
+# Short-entry FRAGILITY overlay: grade colors + human-readable driver labels.
+_FRAGILITY_GRADE = {
+    "none": ("calm", "#64748b"),
+    "watch": ("WATCH", "#ca8a04"),
+    "lean": ("LEAN", "#ea580c"),
+    "act": ("ACT", "#dc2626"),
+}
+_FRAGILITY_LABELS = {
+    "term_structure": "VIX term structure (curve flattening)",
+    "vix_velocity": "VIX velocity (spot rising)",
+    "vvix": "VVIX (vol-of-vol / tail demand)",
+    "skew": "SKEW (cost of tail puts)",
+    "credit": "Credit (HYG/LQD weakening)",
+    "breadth": "Breadth (RSP/SPY narrowing)",
+    "defensive_xlp": "Defensive rotation (staples bid)",
+    "defensive_xlu": "Defensive rotation (utilities bid)",
+}
 _FEATURE_LABELS = {
     "mkt_ret": "Daily return",
     "vol_21": "Realized vol (21d)",
@@ -217,6 +234,88 @@ def _num0(value) -> float:
     return 0.0 if pd.isna(n) else float(n)
 
 
+def _fragility_card(rec: dict) -> str:
+    """Dedicated card for the LEADING short-entry FRAGILITY score (0-100%).
+
+    Graded WATCH / LEAN / ACT against the ``config.FRAGILITY_*`` thresholds, with
+    a banded gauge and the top component drivers. Display-only — never touches
+    `bear_prob`. Renders a graceful 'inputs unavailable' state when the extra
+    Yahoo inputs aren't present (so the card always appears once the overlay is
+    enabled).
+    """
+    if "fragility_score" not in rec:
+        return ""  # overlay not enabled / not emitted by this signal
+
+    score = rec.get("fragility_score")
+    grade = str(rec.get("fragility_grade", "none"))
+    glabel, gcolor = _FRAGILITY_GRADE.get(grade, ("calm", "#64748b"))
+    watch = config.FRAGILITY_WATCH * 100.0
+    lean = config.FRAGILITY_LEAN * 100.0
+    act = config.FRAGILITY_ACT * 100.0
+
+    # Threshold-banded gauge: calm -> WATCH -> LEAN -> ACT (gold -> orange -> red).
+    gauge_bg = (
+        "linear-gradient(90deg,"
+        f"#1f2937 0%,#1f2937 {watch:.0f}%,"
+        f"#ca8a04 {watch:.0f}%,#ca8a04 {lean:.0f}%,"
+        f"#ea580c {lean:.0f}%,#ea580c {act:.0f}%,"
+        f"#dc2626 {act:.0f}%,#dc2626 100%)"
+    )
+
+    if score is None or pd.isna(pd.to_numeric(pd.Series([score]), errors="coerce")[0]):
+        body = (
+            "<div class='prob' style='color:#64748b;font-size:40px'>—</div>"
+            "<div class='sub'>Fragility inputs (VIX term structure, VVIX, SKEW, "
+            "credit/breadth/defensive ETFs) are unavailable right now; the score "
+            "will populate once they refresh.</div>"
+        )
+    else:
+        s_pct = max(0.0, min(1.0, float(score))) * 100.0
+        drivers = rec.get("fragility_drivers") or []
+        rows = []
+        for name, sub in drivers[:4]:
+            sval = _num0(sub)
+            scol = "#dc2626" if sval >= 0.5 else "#9ca3af"
+            label = _FRAGILITY_LABELS.get(str(name), str(name))
+            rows.append(
+                f"<tr><td>{html.escape(label)}</td>"
+                f"<td class='num' style='color:{scol};font-weight:600'>"
+                f"{sval:.0%}</td></tr>"
+            )
+        drivers_tbl = (
+            "<table style='margin-top:10px'>"
+            "<tr><th>Top fragility drivers</th><th class='num'>Stress</th></tr>"
+            + "\n".join(rows)
+            + "</table>"
+            if rows
+            else "<div class='sub' style='margin-top:8px'>No component drivers "
+            "available.</div>"
+        )
+        body = (
+            f"<div class='prob' style='color:{gcolor}'>{s_pct:.0f}%</div>"
+            f"<div class='gauge' style='background:{gauge_bg}'>"
+            f"<div class='needle' style='left:calc({s_pct:.1f}% - 1.5px)'></div></div>"
+            "<div class='gauge-scale'><span>calm</span>"
+            f"<span>WATCH {watch:.0f}</span><span>LEAN {lean:.0f}</span>"
+            f"<span>ACT {act:.0f}</span></div>"
+            f"<div class='chip' style='background:{gcolor}22;color:{gcolor};"
+            f"margin-top:10px'>{glabel}</div>"
+            f"{drivers_tbl}"
+        )
+
+    return f"""
+  <div class="card dial">
+    <h2 style="text-align:left">Short-entry fragility &middot; leading early-warning</h2>
+    {body}
+    <div class="sub" style="margin-top:10px;text-align:left">A LEADING gauge for
+      buying protection while it's still cheap — the opposite loss function from
+      re-entry, so it can read elevated with stocks near highs and VIX low. Each
+      driver is a drift-robust z-score of a recent <i>change</i>. Display-only:
+      it never moves the risk dial. Early false positives are expected (and
+      cheap) — treat ACT as &ldquo;scale into protection&rdquo;, not all-in.</div>
+  </div>"""
+
+
 # --------------------------------------------------------------------------- #
 # Tables
 # --------------------------------------------------------------------------- #
@@ -331,6 +430,8 @@ def render(
             "shorts / re-entering longs.</div></div>"
         )
 
+    fragility_card = _fragility_card(rec)
+
     doc = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -403,8 +504,10 @@ def render(
       {signal_rows}
     </table>
     {spark_signals}
-    <div class="sub" style="margin-top:8px">Each overlay is tracked independently of the dial and the regime label. Short-entry timing is still in development.</div>
+    <div class="sub" style="margin-top:8px">Each overlay is tracked independently of the dial and the regime label. The short-entry timing is the graded fragility score below.</div>
   </div>
+
+  {fragility_card}
 
   <div class="card">
     <h2>Why — what's driving today's read (live CJM)</h2>
