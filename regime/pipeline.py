@@ -45,7 +45,7 @@ def _orient_bear_as_1(labels: np.ndarray, returns) -> np.ndarray:
     return labels if r1 <= r0 else 1 - labels
 
 
-def cjm_feature_drivers(jm, reg_cols, x_row, bear_state) -> list[dict]:
+def cjm_feature_drivers(jm, reg_cols, x_row, bear_state, history=None) -> list[dict]:
     """Per-feature attribution of *why* the latest day leans bear vs bull.
 
     The CJM assigns a day's regime by its squared distance (in standardized
@@ -65,9 +65,15 @@ def cjm_feature_drivers(jm, reg_cols, x_row, bear_state) -> list[dict]:
     Leak-free: uses ONLY the live-fitted scaler/centroids and today's features
     (no future data, no separate model). Does not alter the CJM in any way.
 
+    If ``history`` (the full standardized-or-raw feature frame used to fit the
+    model, aligned to ``reg_cols``) is given, each feature also gets an
+    **empirical percentile** — where today's raw value sits within its own
+    historical distribution (0–1). This is more interpretable than the z alone
+    (it makes no normality assumption) and complements it.
+
     Returns a list of dicts (one per feature), sorted by |bear_pull| desc:
-        feature, value (raw), z (standardized today), bull_centroid_z,
-        bear_centroid_z, bear_pull (signed, std units), share (|pull| fraction).
+        feature, value (raw), z (standardized today), pctile (0–1 or None),
+        bull_centroid_z, bear_centroid_z, bear_pull (signed), share.
     """
     x_row = np.asarray(x_row, dtype=float).reshape(1, -1)
     z = jm.scaler.transform(x_row)[0]
@@ -76,11 +82,24 @@ def cjm_feature_drivers(jm, reg_cols, x_row, bear_state) -> list[dict]:
     bull_mu = mu[1 - bear_state]
     pull = (z - bull_mu) ** 2 - (z - bear_mu) ** 2  # >0 -> pulls bear
     denom = float(np.abs(pull).sum()) or 1.0
+
+    # Empirical percentile of today's raw value within each feature's history.
+    pctiles: list[float | None] = [None] * len(reg_cols)
+    if history is not None:
+        for i, col in enumerate(reg_cols):
+            try:
+                s = pd.to_numeric(history[col], errors="coerce").dropna()
+                if len(s) >= 30:
+                    pctiles[i] = float((s <= x_row[0, i]).mean())
+            except Exception:
+                pctiles[i] = None
+
     rows = [
         {
             "feature": reg_cols[i],
             "value": float(x_row[0, i]),
             "z": float(z[i]),
+            "pctile": pctiles[i],
             "bull_centroid_z": float(bull_mu[i]),
             "bear_centroid_z": float(bear_mu[i]),
             "bear_pull": float(pull[i]),
@@ -141,6 +160,36 @@ def reentry_overlay(
             "reentry_flag": confirmed.reindex(idx).fillna(False),
         }
     )
+
+
+def _reentry_diagnostics(feat: pd.DataFrame, asof) -> dict:
+    """Live state of the re-entry gate's two conditions, for the dashboard.
+
+    Returns how far price has rebounded off its trailing low vs the threshold,
+    and whether VIX is receding (below its 21d mean). All backward-looking; this
+    only describes the gate, it never changes any signal.
+    """
+    lb = config.REENTRY_LOOKBACK
+    price = feat["market"].reindex(feat.index).ffill()
+    trail_low = price.rolling(lb, min_periods=1).min()
+    rebound_pct = float(price.loc[asof] / trail_low.loc[asof] - 1.0)
+    cond_price = rebound_pct >= config.REENTRY_REBOUND
+    vix_receding = None
+    cond_vix = True
+    if config.REENTRY_REQUIRE_VIX and "vix" in feat.columns:
+        vix = feat["vix"].reindex(feat.index).ffill()
+        vix_ma = vix.rolling(21, min_periods=1).mean()
+        vix_receding = bool(vix.loc[asof] < vix_ma.loc[asof])
+        cond_vix = vix_receding
+    return {
+        "rebound_pct": rebound_pct,
+        "rebound_threshold": float(config.REENTRY_REBOUND),
+        "lookback": int(lb),
+        "cond_price": bool(cond_price),
+        "vix_receding": vix_receding,
+        "cond_vix": bool(cond_vix),
+        "require_vix": bool(config.REENTRY_REQUIRE_VIX),
+    }
 
 
 def short_entry_overlay(
@@ -459,7 +508,7 @@ def walk_forward(
 
         if mode == "gbm_forecast":
             # Legacy: gradient-boosted one-step-ahead forecast of the next-day
-            # regime, trained on the CJM's hard labels.
+           
             y = pd.Series(train_labels, index=train.index).shift(-1).dropna()
             X = train.loc[y.index, pred_cols]
             model = _new_classifier()
@@ -556,7 +605,8 @@ def latest_signal(feat: pd.DataFrame, extra: pd.DataFrame | None = None) -> dict
     # features) and available in BOTH signal modes, since the CJM is always fit.
     try:
         out["drivers"] = cjm_feature_drivers(
-            jm, reg_cols, df[reg_cols].iloc[-1].to_numpy(), bear_state
+            jm, reg_cols, df[reg_cols].iloc[-1].to_numpy(), bear_state,
+            history=df[reg_cols],
         )
     except Exception:
         out["drivers"] = []
@@ -569,6 +619,7 @@ def latest_signal(feat: pd.DataFrame, extra: pd.DataFrame | None = None) -> dict
         ov = reentry_overlay(bp_series, feat)
         out["reentry_flag"] = bool(ov["reentry_flag"].iloc[-1])
         out["bear_prob_overlay"] = float(ov["bear_prob_overlay"].iloc[-1])
+        out["reentry_diag"] = _reentry_diagnostics(feat, df.index[-1])
 
     # Short-ENTRY overlay (default ON; display-only) — a graded FRAGILITY SCORE.
     # A LEADING early-warning for buying protection while it's still cheap (the
@@ -599,18 +650,28 @@ def latest_signal(feat: pd.DataFrame, extra: pd.DataFrame | None = None) -> dict
             out["fragility_drivers"] = sorted(
                 comps.items(), key=lambda kv: kv[1], reverse=True
             )
+            # Empirical percentiles: where today's stress sits within its own
+            # history (more interpretable than the bare 0–1 sub-score). Composite
+            # + per-component, computed leak-free from the full fragility frame.
+            def _pct(series, value):
+                s = pd.to_numeric(series, errors="coerce").dropna()
+                if len(s) < 30 or pd.isna(value):
+                    return None
+                return float((s <= float(value)).mean())
+
+            out["fragility_pctile"] = _pct(fr["fragility"], row["fragility"])
+            out["fragility_pctiles"] = {
+                c: _pct(fr[c], row[c]) for c in comps
+            }
             # The logged/dashboard flag fires once fragility reaches LEAN.
             out["short_entry_flag"] = row["grade"] in ("lean", "act")
         else:
             out["fragility_score"] = None
             out["fragility_grade"] = "none"
             out["fragility_drivers"] = []
+            out["fragility_pctile"] = None
+            out["fragility_pctiles"] = {}
             out["short_entry_flag"] = False
-
-        # Secondary, LATER-stage "decline-confirmed" tell (the price-drawdown
-        # trigger). Kept distinct from the leading score above.
-        se = short_entry_overlay(bp_series, feat)
-        out["decline_confirmed"] = bool(se["short_entry_flag"].iloc[-1])
 
     return out
 

@@ -184,21 +184,66 @@ SHORT_ENTRY_REQUIRE_VIX = True  # also require VIX > its 21d average (fear risin
 # --------------------------------------------------------------------------- #
 # Your personal allocation playbook (edit to match YOUR risk tolerance)
 # --------------------------------------------------------------------------- #
-# These are *suggestions* the tool prints. They are not trades.
+# These are *suggestions* the tool prints. They are not trades. This portfolio
+# holds NO bonds by design — de-risking means moving toward CASH / lower beta /
+# hedges, never into fixed income. Aggressiveness is expressed as a target
+# EQUITY BETA (portfolio sensitivity to the market) and, for the trading
+# account, a net DELTA bias plus whether options/leverage are appropriate.
+#
+# The 3-way stance keys the qualitative playbook; `recommend.py` additionally
+# derives a continuous target beta/delta from the bear-probability dial so the
+# guidance scales smoothly within a regime (e.g. "deep BULL near 0%" is more
+# aggressive than "BULL near the 40% line").
 ALLOCATION_PLAYBOOK = {
     "BULL": {
-        "fidelity_401k": "Risk-on: ~90% equity index funds / ~10% bonds.",
-        "thinkorswim": "Hold core equity exposure (e.g., SPY/QQQ). Full satellite risk budget.",
+        "fidelity_401k": (
+            "Risk-on: 100% equity (broad index + growth tilt). No bonds. In a "
+            "deep/confirmed bull (dial near 0%), full aggression is appropriate — "
+            "leveraged/levered-index or call exposure acceptable. As the dial "
+            "lifts toward the 40% line, stay 100% invested but DROP options/"
+            "leverage and trim toward plain beta."
+        ),
+        "thinkorswim": (
+            "Carry a long, high-beta core (SPY/QQQ + leaders). Full satellite "
+            "risk budget; net delta clearly LONG. Options/leverage on the long "
+            "side acceptable when the dial is near 0%."
+        ),
     },
     "NEUTRAL": {
-        "fidelity_401k": "Stay the course at your baseline (~70% equity / ~30% bonds).",
-        "thinkorswim": "No change. Avoid trading on a low-conviction signal.",
+        "fidelity_401k": (
+            "Hold 100% equity but DE-BETA: rotate from high-growth toward "
+            "lower-beta / quality / equal-weight; no new options or leverage. "
+            "Keep a little dry powder (cash from contributions). No bonds."
+        ),
+        "thinkorswim": (
+            "Low-conviction zone — don't initiate fresh directional risk. Trim "
+            "net delta toward neutral, let theta/hedges define the book. Avoid "
+            "adding leverage; consider a cheap collar on the long core."
+        ),
     },
     "BEAR": {
-        "fidelity_401k": "Risk-off: shift toward ~40% equity / ~60% bonds or stable value.",
-        "thinkorswim": "Reduce/hedge satellite risk. Raise cash. Consider defensive sectors.",
+        "fidelity_401k": (
+            "Risk-off WITHOUT bonds: cut equity beta — raise CASH / stable value "
+            "and shift the remaining equity toward defensives (staples, min-vol). "
+            "No bonds, no leverage."
+        ),
+        "thinkorswim": (
+            "Reduce/hedge the long core; take net delta toward flat or short. "
+            "Raise cash, buy protection (puts / VIX calls), or run defined-risk "
+            "shorts. This is the account that expresses the bearish view."
+        ),
     },
 }
+
+# Continuous aggressiveness targets derived from the bear-probability dial. The
+# tool interpolates a target equity BETA between these anchors (1.0 = market;
+# >1 = leveraged/high-beta tilt; <1 = de-risked). Net DELTA bias (trading book)
+# follows the same shape. No bonds anywhere — the low-aggression end is CASH.
+TARGET_BETA_MAX = 1.30  # at bear_prob = 0% (deep bull): leaned-in, leverage OK
+TARGET_BETA_MIN = 0.15  # at bear_prob = 100% (deep bear): mostly cash + defensives
+# Below this dial reading, options/leverage are considered appropriate (deep,
+# confirmed bull only); above it, stay long but plain-beta (no options/leverage).
+LEVERAGE_OK_BELOW = 0.15
 
 # --------------------------------------------------------------------------- #
 # Backtest economics (the regime SIGNAL is the product; these only affect how

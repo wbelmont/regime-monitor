@@ -22,6 +22,27 @@ def classify(next_bear_prob: float) -> str:
     return "NEUTRAL"
 
 
+def exposure_targets(next_bear_prob: float) -> dict:
+    """Continuous aggressiveness targets derived from the dial.
+
+    Interpolates a target equity BETA between ``config.TARGET_BETA_MAX`` (dial
+    0%) and ``config.TARGET_BETA_MIN`` (dial 100%), a suggested net DELTA bias
+    for the trading book (same shape, signed), and whether options/leverage are
+    appropriate (only in a deep/confirmed bull). No bonds — the low end is cash.
+    """
+    p = max(0.0, min(1.0, float(next_bear_prob)))
+    beta = config.TARGET_BETA_MAX + (config.TARGET_BETA_MIN - config.TARGET_BETA_MAX) * p
+    # Net delta bias: long when risk-on, flat/short as the dial climbs. Centered
+    # so it crosses zero around the bear threshold and goes net-short beyond it.
+    delta = round((config.BEAR_THRESHOLD - p) / config.BEAR_THRESHOLD, 2)
+    delta = max(-1.0, min(1.0, delta))
+    return {
+        "target_beta": round(beta, 2),
+        "net_delta": delta,
+        "leverage_ok": p <= config.LEVERAGE_OK_BELOW,
+    }
+
+
 def build_recommendation(signal: dict) -> dict:
     stance = classify(signal["next_bear_prob"])
     playbook = config.ALLOCATION_PLAYBOOK[stance]
@@ -36,6 +57,7 @@ def build_recommendation(signal: dict) -> dict:
         "regime_binary": int(signal["current_regime"]),
         "fidelity_401k": playbook["fidelity_401k"],
         "thinkorswim": playbook["thinkorswim"],
+        "exposure": exposure_targets(signal["next_bear_prob"]),
         "top_drivers": list(signal.get("feature_importances", {}).items())[:5],
     }
     # CJM per-feature attribution (why today leans bear/bull). Present in both
@@ -46,6 +68,8 @@ def build_recommendation(signal: dict) -> dict:
     if "reentry_flag" in signal:
         rec["reentry_flag"] = signal["reentry_flag"]
         rec["bear_prob_overlay"] = signal.get("bear_prob_overlay")
+        if "reentry_diag" in signal:
+            rec["reentry_diag"] = signal["reentry_diag"]
     # Short-ENTRY overlay (a future, separate layer — mirror of the re-entry
     # overlay). Passed through when the signal provides it so the dashboard and
     # history can track it as its own signal; absent/0 until that overlay lands.
@@ -57,6 +81,8 @@ def build_recommendation(signal: dict) -> dict:
         rec["fragility_score"] = signal["fragility_score"]
         rec["fragility_grade"] = signal.get("fragility_grade", "none")
         rec["fragility_drivers"] = signal.get("fragility_drivers", [])
+        rec["fragility_pctile"] = signal.get("fragility_pctile")
+        rec["fragility_pctiles"] = signal.get("fragility_pctiles", {})
     if "decline_confirmed" in signal:
         rec["decline_confirmed"] = signal["decline_confirmed"]
     return rec

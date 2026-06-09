@@ -1,9 +1,11 @@
 # Next steps & handoff notes
 
-**Last updated: 2026-06-09 (session: AI-aware defensive tell `C` + MOVE added to
-the fragility composite; dashboard viz pass 1; refit=15 tested & rejected. NEXT:
-a full dashboard REDESIGN — see PICKING UP NEXT).** Read `README.md` first for
-full project + paper context, then this file for current state and the next task.
+**Last updated: 2026-06-09 (session: full dashboard REDESIGN shipped — true dark
+mode, SVG risk dial, rigorous methodology explainer, no-bonds beta/delta
+playbook, re-entry "why" checklist, fragility ignition heatmap, percentiles
+everywhere. NEXT: evaluate whether a GARCH model adds anything the CJM doesn't —
+see PICKING UP NEXT).** Read `README.md` first for full project + paper context,
+then this file for current state and the next task.
 
 ---
 
@@ -24,18 +26,21 @@ Cost rules: always use --no-refresh (cached data); iterate on a coarse grid /
 short CV window before any full run; ask before kicking off a ~13-min backtest;
 summarize terminal output. Don't change the CJM model math.
 
-Today's task: a DASHBOARD REDESIGN — see "PICKING UP NEXT" at the top of
-"Prioritized next steps" in NEXT_STEPS.md for the full design brief. It's a
-true clean dark-mode rework of regime/dashboard.py (display-only; no model
-changes): make the CJM continuous risk dial big + top-center, add a plain-English
-"how the CJM works" explainer, reorder modules (dial -> why-drivers -> overlays/
-fragility -> recent calls at the bottom), drop the redundant binary Bull/Bear
-sparkline, rethink the short/long re-entry display, and make the fragility chart
-legible by shading the leading stress components so their progression is
-traceable. Design references: Robinhood / Loop / clean fintech. The relevant
-file is regime/dashboard.py (render + _spark_* / _fragility_card + inline CSS);
-render with `dashboard --no-refresh --no-log` and eyeball before shipping. The
-fragility overlay model itself is DONE (cand. C + MOVE shipped 2026-06-09).
+Today's task: a THINK-FIRST research-scoping question — does a GARCH model add
+anything the CJM doesn't already do? See "PICKING UP NEXT" at the top of
+"Prioritized next steps" in NEXT_STEPS.md for the full brief. Scope it before
+building: a GARCH(1,1)/EGARCH gives a parametric conditional-vol forecast, but
+the CJM already consumes realized vol, VIX, and the vol risk premium and is a
+strong volatility-regime detector — so measure whether a rolling GARCH sigma adds
+INCREMENTAL info (correlate it with vol_21, realized forward vol, and the CJM
+bear nowcast in the notebook) before wiring it in as a CJM feature, a fragility
+component, or a risk-sizing transform. Only adopt it if it demonstrably improves
+a signal-quality axis (earlier fragility lead / calibration / less whipsaw) the
+current features don't capture; otherwise document "CJM dominates" and stop. The
+`arch` package may need installing into .venv. Don't change the CJM math.
+
+NOTE: the 2026-06-09 dashboard redesign is built but NOT yet committed/pushed —
+push it when the owner signs off.
 ```
 
 ---
@@ -125,6 +130,61 @@ independent, display-only layers; the traded `bear_prob` stays a pure CJM nowcas
 ---
 
 ## What's DONE (so the next chat doesn't redo it)
+
+### ✦ DASHBOARD REDESIGN shipped + interpretability pass (2026-06-09 PM)
+
+A true clean dark-mode rework of `regime/dashboard.py` (display-only; no CJM math
+changed) plus a no-bonds allocation playbook and percentile interpretability.
+
+- **True dark theme.** New cohesive palette (`dashboard.C`): near-black canvas,
+  one elevated card surface, a single risk ramp (mint `#21d07a` → amber → coral
+  `#ff5d63`) reused by every element; **Inter** font (non-blocking load with a
+  system fallback so the page always renders); generous whitespace. Replaced the
+  generic blue/"Claude" look.
+- **The CJM risk dial is the hero.** Inline **SVG semicircular arc gauge**
+  (`_arc_gauge` + `_risk_color`/`_arc_point`) — crisp, self-contained (no PNG),
+  with threshold ticks + a colored needle; the big adaptive-precision % number is
+  anchored on the gauge pivot (`.dial-center`, `top:72%` + transform) so it sits
+  centered in the bowl at any width.
+- **Module order** (matches the brief): dial → **How this works (methodology)** →
+  Why drivers → timing overlay → fragility → suggested stance → **Recent calls
+  (bottom)**. Dropped the redundant binary Bull/Bear sparkline + the near-empty
+  overlay event timeline.
+- **Rigorous methodology explainer.** 5 steps that emphasize the CJM's edge:
+  distribution-free jump penalty vs an HMM's parametric emissions/EM/Viterbi-vs-
+  smoothing mismatch; continuous calibrated probability (Brier ≈0.02) vs the
+  discrete SJM's coarse 0/1; leak-free walk-forward; volatility (not direction)
+  detector. Inline `.mono` formula styling.
+- **Re-entry overlay now shows WHY.** `pipeline._reentry_diagnostics()` (leak-free)
+  exposes rebound-%-off-the-low vs threshold + VIX-vs-21d-MA; passed via
+  `recommend` → dashboard renders a ✓/○ **condition checklist** (e.g. "S&P +8.9%
+  off its 42-day low (needs ≥+10%) ○ / VIX still elevated ○ → waiting"). No longer
+  an opaque "armed".
+- **Fragility chart = component ignition heatmap** (`_frag_ignition`): replaced the
+  tangle of lines with rows = stress tells (ordered structural→late), x = time,
+  cell shade = 0..1 sub-score (dark→amber→coral), composite track on top — so you
+  can trace which tell lit up first, then next.
+- **No-bonds allocation playbook.** `config.ALLOCATION_PLAYBOOK` rewritten: 100%
+  equity always, NEVER bonds — de-risking = cash / lower beta / hedges. Added
+  `recommend.exposure_targets()` deriving a continuous **target equity beta**
+  (`TARGET_BETA_MAX=1.30` at dial 0% → `TARGET_BETA_MIN=0.15` at 100%), a net
+  **delta** bias (long→flat→short as the dial climbs), and an **options/leverage**
+  flag (OK only when dial ≤ `LEVERAGE_OK_BELOW=0.15`, i.e. deep/confirmed bull;
+  otherwise "100% invested but plain beta, no options/leverage"). Dashboard shows
+  a beta meter (with the market-1.0× tick) + delta + leverage chip. **Owner can
+  tune the beta anchors / leverage cutoff to taste.**
+- **Percentiles for interpretability (2026-06-09).** Empirical percentiles (where
+  today sits in its OWN trailing distribution — no normality assumption) added
+  alongside the z-scores/sub-scores: `cjm_feature_drivers(..., history=)` adds a
+  `pctile` per feature (shown under the σ in the Why table's "vs normal"); the
+  fragility block adds `fragility_pctile` (composite) + `fragility_pctiles`
+  (per-component), shown as a "Nth pct vs history" chip + a "vs history" column.
+  Live read: fragility 63% = **97th pct** of its history; VIX term-structure tell
+  **99th pct** — reinforces the LEAN. `_fmt_pctile` does the ordinal formatting.
+- **Render/verify:** `dashboard --no-refresh --no-log`; previewed via a local
+  `python3 -m http.server` (Simple Browser white-screened on `file://`; Safari +
+  `http://localhost:PORT` works). **Not yet committed/pushed** at session end —
+  push when ready (rebase+retry guardrails in the CI note below).
 
 ### ✦ SHORT-ENTRY redesigned as a graded FRAGILITY SCORE (2026-06-08)
 
@@ -416,42 +476,51 @@ roughly neutral Sharpe/DD.
 > **North star:** optimize the CJM bear-probability nowcast as a daily
 > risk-tolerance dial. Judge ideas by signal quality, not just backtest P&L.
 >
-> **▶ PICKING UP NEXT (saved 2026-06-09): DASHBOARD REDESIGN — a true, clean
-> dark-mode rework of `regime/dashboard.py` (display-only; no model changes).**
-> Pass 1 (Lato + dark charts + 2-week sparklines + fragility chart) shipped, but
-> the owner wants a real visual + information-architecture overhaul. Owner's
-> brief, verbatim-as-understood:
+> **▶ PICKING UP NEXT (saved 2026-06-09): EVALUATE whether a GARCH model adds
+> anything the CJM doesn't.** This is a THINK-FIRST / research-scoping task, not a
+> build — the owner's hypothesis is that "the CJM might already be better at
+> everything GARCH can do," and we should confirm or refute that before writing
+> code. Don't change the CJM math. Frame it as signal-quality, not P&L.
 >
-> 1. **Aesthetics: design a TRUE dark mode.** Right now "it still looks like a
->    Claude website." Aim for the design language of clean fintech / 8VC
->    portfolio companies — **Robinhood**, **Loop** (loop.com, owner liked it
->    today) as references. Clean, modern, confident, minimal.
-> 2. **The CJM continuous risk dial is THE product** — make it bigger and put it
->    **top & center** (its current "As of" reading is tiny in the bottom-right;
->    that number is the most valuable, finely-tuned piece in the system).
-> 3. **Add an explainer module** ("what is actually happening / how the CJM runs")
->    so the dashboard is **maximally interpretable** to the owner — plain-English
->    description of the model + the leak-free walk-forward nowcast.
-> 4. **Module order:** (1) CJM risk dial (big, center), (2) **"Why — what's
->    driving today's read"** (the CJM driver attribution; it directly follows the
->    dial), ... overlays/fragility ..., and **Recent calls stays at the BOTTOM**
->    (owner wants the history there).
-> 5. **Drop the 2-week BINARY Bull/Bear sparkline** — redundant given the
->    continuous dial up top.
-> 6. **Rethink the short / long re-entry overlay display** — is there a more
->    interpretable presentation? (Current is OK; find something better.)
-> 7. **Fragility chart is too messy / doesn't add value as-is.** Idea: **shade
->    the leading stress components** more so you can TRACE the progression of the
->    lead indicators over time (which tell lit up first, then next…). Make the
->    component progression legible rather than a tangle of lines.
+> Questions to answer (cheaply, with cached data + the notebook harness):
 >
-> Implementation notes: it's all `regime/dashboard.py` (render + the `_spark_*`
-> / `_fragility_card` helpers + the inline CSS). Keep it self-contained (inline
-> CSS, base64 PNGs) so it still publishes to GitHub Pages. `cmd_dashboard` passes
-> `rec`, `history`, and a dense `fragility` DataFrame. Render locally with
-> `dashboard --no-refresh --no-log` and eyeball in Simple Browser before shipping.
+> 1. **What would GARCH actually add?** GARCH(1,1)/EGARCH/GJR give a *parametric
+>    conditional-volatility* forecast (vol clustering + mean reversion, with an
+>    explicit 1-day/h-day-ahead σ and leverage asymmetry). The CJM already
+>    consumes realized vol (`vol_21`), implied vol (`vix`) and the vol risk
+>    premium, and its bear nowcast is a strong *volatility-regime* detector
+>    (forward-vol corr ≈0.57). So the honest question is whether a GARCH σ
+>    forecast adds INCREMENTAL info beyond those features.
+> 2. **Three candidate roles, in priority order:**
+>    (a) **A new CJM feature** — feed a GARCH conditional-σ (or its innovation /
+>        σ-vs-realized gap) into `REGIME_FEATURES` via the REPLACE-not-append
+>        discipline (item C); test on the eval episodes for timeliness/whipsaw.
+>        Likely redundant with `vol_21`/`vix` — measure the correlation first.
+>    (b) **A fragility component** — a GARCH-implied short-horizon vol JUMP
+>        (forecast σ rising fast, or realized > GARCH-expected) as another
+>        drift-robust leading tell. Plausibly the best fit, since fragility is
+>        explicitly a leading-vol story.
+>    (c) **A risk-sizing transform** on the dial (scale exposure by forecast σ).
+>        Lowest priority — the beta playbook already does discretionary sizing.
+> 3. **Cheap first cut:** in the notebook, fit a rolling GARCH(1,1) on S&P returns
+>    (the `arch` package), get the 1-step σ forecast, and correlate it with
+>    (i) `vol_21`, (ii) realized fwd 21d vol, (iii) the CJM bear nowcast. If GARCH
+>    σ is ~collinear with existing features AND doesn't lead the nowcast, the CJM
+>    likely dominates and GARCH is not worth wiring in — record that and move on.
+> 4. **Decision rule:** only adopt GARCH somewhere if it demonstrably improves a
+>    signal-quality axis (earlier fragility lead, better calibration, less
+>    whipsaw) that the current features don't already capture. Otherwise document
+>    "CJM dominates" and close the thread.
 >
-> **Deferred (still valuable, after the redesign):**
+> Cost rules as always: `--no-refresh`, coarse first, ask before any ~13-min run.
+> `arch` may need installing into `.venv` (cheap, pure-Python-ish).
+>
+> **Also still open from the redesign session:** the redesign is built but
+> **NOT yet committed/pushed** — push it to `origin/main` when the owner signs
+> off (hosted page will then show the new design). Owner may also want to tune the
+> exposure anchors (`TARGET_BETA_MAX/MIN`, `LEVERAGE_OK_BELOW`) to taste.
+>
+> **Deferred (still valuable):**
 > **(A) Harder validation of the fragility score** — per-component ablation,
 > false-positive clustering, behavior where component coverage is partial. (The
 > 2026-06-09 horse-races did a coarse version of this; a fuller pass is still
@@ -461,13 +530,3 @@ roughly neutral Sharpe/DD.
 > **(C) REPLACE-not-append feature selection** for the CJM (the remaining lever
 > on the structural short-ENTRY lag INSIDE the pure signal; don't change CJM math).
 > **(D) JPY as a SEPARATE alert** (not a blended fragility component — see DONE).
->
-> - **Hosted dashboard / CI: healthy.** Pages workflow runs TWICE daily (13:30 +
->   21:30 UTC) with the rebase+retry push fix. If a push is rejected by a
->   `regime-bot` history commit, rebase onto `origin/main` (only conflict is
->   `data/signal_history.csv` — take the remote's version; the next run
->   re-appends). NOTE: `gh` CLI is NOT installed locally; inspect via the Actions
->   tab or the live page's `last-modified` header (curl `--max-time 15`). And:
->   every network call needs an explicit timeout + bounded loop (commits are
->   instant; the PUSH is what stalls — wrap with `-c http.lowSpeedLimit=1000
->   -c http.lowSpeedTime=20`).

@@ -70,7 +70,9 @@ def base_subscores(extra: pd.DataFrame, feat: pd.DataFrame) -> dict[str, pd.Seri
     vix = feat["vix"].reindex(e.index).ffill()
     s: dict[str, pd.Series] = {}
     if "vix3m" in e:
-        s["term_structure"] = _sub(_stress(e["vix3m"] / vix.replace(0, np.nan), window, False))
+        s["term_structure"] = _sub(
+            _stress(e["vix3m"] / vix.replace(0, np.nan), window, False)
+        )
     s["vix_velocity"] = _sub(_stress(vix, window, True))
     if "vvix" in e:
         s["vvix"] = _sub(_stress(e["vvix"], window, True))
@@ -89,8 +91,11 @@ def base_subscores(extra: pd.DataFrame, feat: pd.DataFrame) -> dict[str, pd.Seri
 
 
 def base_weights() -> dict[str, float]:
-    w = {k: v for k, v in config.FRAGILITY_WEIGHTS.items()
-         if k not in ("defensive_xlp", "defensive_xlu")}
+    w = {
+        k: v
+        for k, v in config.FRAGILITY_WEIGHTS.items()
+        if k not in ("defensive_xlp", "defensive_xlu")
+    }
     w["def_staples"] = 0.07
     w["def_xlu"] = 0.03
     return w
@@ -110,13 +115,18 @@ def composite(subs: dict[str, pd.Series], weights: dict[str, float], idx) -> pd.
 
 def lead_days(comp: pd.Series, peak: str) -> float:
     p = pd.Timestamp(peak)
-    win = comp[(comp.index >= p - pd.Timedelta(days=int(LEAD_WINDOW * 1.5))) & (comp.index <= p)]
+    win = comp[
+        (comp.index >= p - pd.Timedelta(days=int(LEAD_WINDOW * 1.5)))
+        & (comp.index <= p)
+    ]
     armed = win[win >= TH]
     return float("nan") if armed.empty else float((p - armed.index[0]).days)
 
 
 def calm_fp(comp: pd.Series, s: str, e: str) -> float:
-    win = comp[(comp.index >= pd.Timestamp(s)) & (comp.index <= pd.Timestamp(e))].dropna()
+    win = comp[
+        (comp.index >= pd.Timestamp(s)) & (comp.index <= pd.Timestamp(e))
+    ].dropna()
     return float("nan") if win.empty else float((win >= TH).mean())
 
 
@@ -136,11 +146,22 @@ def report(name: str, comps: dict[str, pd.Series]) -> None:
         print(row)
     print("--- hit rate by era ---")
     for era, lbl in (("pre", "2007-2019"), ("post", "2020-2026")):
-        print(f"{lbl:<22}" + "".join(f"{f'{hits[c][era][0]}/{hits[c][era][1]}':>10}" for c in comps))
+        print(
+            f"{lbl:<22}"
+            + "".join(f"{f'{hits[c][era][0]}/{hits[c][era][1]}':>10}" for c in comps)
+        )
     print("--- calm FP rate by era (lower=better) ---")
     for era, lbl, wins in (
-        ("pre", "2007-2019", [v for v in CALM.values() if pd.Timestamp(v[0]) < ERA_SPLIT]),
-        ("post", "2020-2026", [v for v in CALM.values() if pd.Timestamp(v[0]) >= ERA_SPLIT]),
+        (
+            "pre",
+            "2007-2019",
+            [v for v in CALM.values() if pd.Timestamp(v[0]) < ERA_SPLIT],
+        ),
+        (
+            "post",
+            "2020-2026",
+            [v for v in CALM.values() if pd.Timestamp(v[0]) >= ERA_SPLIT],
+        ),
     ):
         row = f"{lbl:<22}"
         for c in comps:
@@ -157,11 +178,21 @@ def main() -> None:
     window = config.FRAGILITY_Z_WINDOW
 
     # New tells (fetched here; NOT persisted to config).
-    usdjpy = data._yahoo_close("JPY=X", config.START_DATE, data._today()).reindex(idx).ffill()
-    move = data._yahoo_close("^MOVE", config.START_DATE, data._today()).reindex(idx).ffill()
+    usdjpy = (
+        data._yahoo_close("JPY=X", config.START_DATE, data._today())
+        .reindex(idx)
+        .ffill()
+    )
+    move = (
+        data._yahoo_close("^MOVE", config.START_DATE, data._today())
+        .reindex(idx)
+        .ffill()
+    )
     jpy_ret = usdjpy.pct_change()
     sub_move = _sub(_stress(move, window, True))
-    sub_jpys = _sub(_stress(usdjpy, window, False))  # USD/JPY falling = yen strength = stress
+    sub_jpys = _sub(
+        _stress(usdjpy, window, False)
+    )  # USD/JPY falling = yen strength = stress
     sub_jpyv = _sub(_stress(jpy_ret.rolling(10).std(), window, True))  # yen vol spike
 
     base = base_subscores(extra, feat)
@@ -177,13 +208,20 @@ def main() -> None:
         "C+MOVE": aug({"move": sub_move}, {"move": 0.10}),
         "C+JPYs": aug({"jpys": sub_jpys}, {"jpys": 0.06}),
         "C+JPYv": aug({"jpyv": sub_jpyv}, {"jpyv": 0.06}),
-        "C+MOVE+JPYs": aug({"move": sub_move, "jpys": sub_jpys}, {"move": 0.10, "jpys": 0.06}),
+        "C+MOVE+JPYs": aug(
+            {"move": sub_move, "jpys": sub_jpys}, {"move": 0.10, "jpys": 0.06}
+        ),
     }
     report("COMPOSITE AUGMENTATION (does adding the tell help C?)", candidates)
 
     # ---- standalone raw quality (each tell alone, scored at LEAN) ----
-    standalone = {"MOVE": sub_move, "JPYstrength": sub_jpys, "JPYvol": sub_jpyv,
-                  "credit(HYG/LQD)": base["credit"], "VIXvel": base["vix_velocity"]}
+    standalone = {
+        "MOVE": sub_move,
+        "JPYstrength": sub_jpys,
+        "JPYvol": sub_jpyv,
+        "credit(HYG/LQD)": base["credit"],
+        "VIXvel": base["vix_velocity"],
+    }
     report("STANDALONE (single-tell lead — raw quality, not composite)", standalone)
 
 

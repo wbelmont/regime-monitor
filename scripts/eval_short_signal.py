@@ -73,7 +73,9 @@ def _stress(raw: pd.Series, window: int, rising_is_stress: bool) -> pd.Series:
     return z if rising_is_stress else -z
 
 
-def build_composite(extra: pd.DataFrame, feat: pd.DataFrame, candidate: str) -> pd.Series:
+def build_composite(
+    extra: pd.DataFrame, feat: pd.DataFrame, candidate: str
+) -> pd.Series:
     """Return the 0..1 fragility composite for a given defensive-design candidate."""
     window = config.FRAGILITY_Z_WINDOW
     k, z0 = config.FRAGILITY_K, config.FRAGILITY_Z0
@@ -129,12 +131,18 @@ def build_composite(extra: pd.DataFrame, feat: pd.DataFrame, candidate: str) -> 
         wt = float(weights.get(str(name), 0.0))
         valid = s.notna()
         num = num.add((s.fillna(0.0) * wt).where(valid, 0.0), fill_value=0.0)
-        den = den.add(pd.Series(np.where(valid, wt, 0.0), index=e.index), fill_value=0.0)
+        den = den.add(
+            pd.Series(np.where(valid, wt, 0.0), index=e.index), fill_value=0.0
+        )
     composite = (num / den.replace(0.0, np.nan)).clip(0.0, 1.0)
 
     if candidate == "D":  # risk-on veto: dampen if no corroborating stress
         corrob = pd.concat(
-            [comp_sub.get("credit"), comp_sub.get("breadth"), comp_sub.get("vix_velocity")],
+            [
+                comp_sub.get("credit"),
+                comp_sub.get("breadth"),
+                comp_sub.get("vix_velocity"),
+            ],
             axis=1,
         ).max(axis=1)
         # Soft veto: floor at 0.4 so corroboration scales 0.4..1.0 (never fully zeroed).
@@ -146,8 +154,10 @@ def build_composite(extra: pd.DataFrame, feat: pd.DataFrame, candidate: str) -> 
 
 def lead_days(comp: pd.Series, peak: str, thresh: float) -> float:
     peak_ts = pd.Timestamp(peak)
-    win = comp[(comp.index >= peak_ts - pd.Timedelta(days=int(LEAD_WINDOW * 1.5)))
-               & (comp.index <= peak_ts)]
+    win = comp[
+        (comp.index >= peak_ts - pd.Timedelta(days=int(LEAD_WINDOW * 1.5)))
+        & (comp.index <= peak_ts)
+    ]
     armed = win[win >= thresh]
     if armed.empty:
         return float("nan")
@@ -171,12 +181,16 @@ def main() -> None:
     comps = {c: build_composite(extra, feat, c) for c in ("A", "B", "C", "D")}
     last = min(c.dropna().index.max() for c in comps.values())
     TH = config.FRAGILITY_LEAN  # score at the bar that actually FIRES the flag
-    print(f"data through {last.date()} | scoring at LEAN={TH} "
-          f"(the short_entry_flag bar) | WATCH={config.FRAGILITY_WATCH} "
-          f"ACT={config.FRAGILITY_ACT}\n")
+    print(
+        f"data through {last.date()} | scoring at LEAN={TH} "
+        f"(the short_entry_flag bar) | WATCH={config.FRAGILITY_WATCH} "
+        f"ACT={config.FRAGILITY_ACT}\n"
+    )
 
     # --- lead time to each peak ---
-    print("=== LEAD (days the composite first hit LEAN before the peak; higher=earlier) ===")
+    print(
+        "=== LEAD (days the composite first hit LEAN before the peak; higher=earlier) ==="
+    )
     hdr = f"{'peak':<22}" + "".join(f"{c:>8}" for c in comps)
     print(hdr)
     era_hits = {c: {"pre": [0, 0], "post": [0, 0]} for c in comps}  # [hits, total]
@@ -200,7 +214,9 @@ def main() -> None:
             row += f"{(f'{h}/{t}'):>8}"
         print(row)
 
-    print("\n=== CALM-PERIOD FALSE-POSITIVE RATE (fraction of days at LEAN+; lower=better) ===")
+    print(
+        "\n=== CALM-PERIOD FALSE-POSITIVE RATE (fraction of days at LEAN+; lower=better) ==="
+    )
     print(f"{'calm window':<16}" + "".join(f"{c:>8}" for c in comps))
     for name, (s, e) in CALM.items():
         row = f"{name:<16}"
@@ -213,8 +229,16 @@ def main() -> None:
     print("\n=== CALM FP RATE by era (avg over calm windows) ===")
     print(f"{'era':<14}" + "".join(f"{c:>8}" for c in comps))
     for era, lbl, wins in (
-        ("pre", "2007-2019", [v for k, v in CALM.items() if pd.Timestamp(v[0]) < ERA_SPLIT]),
-        ("post", "2020-2026", [v for k, v in CALM.items() if pd.Timestamp(v[0]) >= ERA_SPLIT]),
+        (
+            "pre",
+            "2007-2019",
+            [v for k, v in CALM.items() if pd.Timestamp(v[0]) < ERA_SPLIT],
+        ),
+        (
+            "post",
+            "2020-2026",
+            [v for k, v in CALM.items() if pd.Timestamp(v[0]) >= ERA_SPLIT],
+        ),
     ):
         row = f"{lbl:<14}"
         for c in comps:
