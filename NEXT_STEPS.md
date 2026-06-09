@@ -1,8 +1,9 @@
 # Next steps & handoff notes
 
-**Last updated: 2026-06-08 (PM session: shipped the fragility dashboard line +
-post-close CI run; see What's DONE).** Read `README.md` first for full project +
-paper context, then this file for current state and the next task.
+**Last updated: 2026-06-09 (session: AI-aware defensive tell `C` + MOVE added to
+the fragility composite; dashboard viz pass 1; refit=15 tested & rejected. NEXT:
+a full dashboard REDESIGN — see PICKING UP NEXT).** Read `README.md` first for
+full project + paper context, then this file for current state and the next task.
 
 ---
 
@@ -23,14 +24,18 @@ Cost rules: always use --no-refresh (cached data); iterate on a coarse grid /
 short CV window before any full run; ask before kicking off a ~13-min backtest;
 summarize terminal output. Don't change the CJM model math.
 
-Today's task: see "PICKING UP NEXT" at the top of "Prioritized next steps" in
-NEXT_STEPS.md. The short-entry FRAGILITY SCORE (a leading early-warning overlay)
-is DONE, live, and now SURFACED as its own graded card on the hosted dashboard.
-Recommended next: (A) a harder / longer-history validation of the fragility
-score (it was tuned on a coarse pass over ~6 episodes) — per-component ablation,
-false-positive clustering, 2008 behavior. Other options: add the fragility grade
-to the iMessage digest (notify.py), or the REPLACE-not-append feature-selection
-A/B for the CJM. Do NOT re-tune fragility thresholds against the same 6 episodes.
+Today's task: a DASHBOARD REDESIGN — see "PICKING UP NEXT" at the top of
+"Prioritized next steps" in NEXT_STEPS.md for the full design brief. It's a
+true clean dark-mode rework of regime/dashboard.py (display-only; no model
+changes): make the CJM continuous risk dial big + top-center, add a plain-English
+"how the CJM works" explainer, reorder modules (dial -> why-drivers -> overlays/
+fragility -> recent calls at the bottom), drop the redundant binary Bull/Bear
+sparkline, rethink the short/long re-entry display, and make the fragility chart
+legible by shading the leading stress components so their progression is
+traceable. Design references: Robinhood / Loop / clean fintech. The relevant
+file is regime/dashboard.py (render + _spark_* / _fragility_card + inline CSS);
+render with `dashboard --no-refresh --no-log` and eyeball before shipping. The
+fragility overlay model itself is DONE (cand. C + MOVE shipped 2026-06-09).
 ```
 
 ---
@@ -108,6 +113,14 @@ independent, display-only layers; the traded `bear_prob` stays a pure CJM nowcas
   divergence components (see `FRAGILITY_*` in `config.py`). The old price-
   drawdown trigger is retained only as a secondary `decline_confirmed` boolean.
   `short_entry_flag` (logged/dashboard) fires at grade ≥ LEAN.
+- **Fragility components (2026-06-09):** defensive tell is **cand. C** — staples
+  rotation = beta-neutral **`XLP/XLY`**, and **XLU gated by staples confirmation**
+  (AI-power contamination fix). **`bond_vol` = MOVE** (`^MOVE`, rising = stress,
+  w=0.10) is IN. **JPY carry-unwind is OUT** as a blended component (it dilutes /
+  delays the composite; see DONE). Don't re-tune the WATCH/LEAN/ACT thresholds
+  on the same ~7 episodes.
+- **`REFIT_EVERY_DAYS = 21`** (refit=15 tested 2026-06-09 → identical results,
+  ~35% more compute; refit cadence doesn't affect the live signal anyway).
 
 ---
 
@@ -403,29 +416,58 @@ roughly neutral Sharpe/DD.
 > **North star:** optimize the CJM bear-probability nowcast as a daily
 > risk-tolerance dial. Judge ideas by signal quality, not just backtest P&L.
 >
-> **▶ PICKING UP NEXT (saved 2026-06-08 PM): the fragility SCORE is DONE & live,
-> and is now SURFACED on the hosted dashboard as its own graded card (see What's
-> DONE). Recommended next, in order:**
-> **(A) Harder validation of the fragility score** — it was calibrated on a
-> COARSE pass over ~6 episodes. Without re-tuning thresholds on those same
-> episodes, sanity-check it more rigorously: per-component contribution/ablation
-> (which tells actually lead?), false-positive clustering in calm years, and
-> behavior on 2008 (partial component coverage). Consider a notebook section.
-> **This is the recommended next task.**
-> **(B) Surface it better — dashboard card DONE; digest REMAINS.** The graded
-> fragility card (gauge + grade + drivers) is live. Still open: add the fragility
-> grade to the iMessage digest (`notify.py`) with change-gating on grade
-> transitions (WATCH→LEAN→ACT), and optionally a fragility sparkline on the
-> dashboard (history CSV already logs `fragility_score`).
-> **(C) REPLACE-not-append feature selection** for the CJM (priority #2) — the
-> remaining lever on the structural short-ENTRY lag INSIDE the pure signal.
-> Coarse pass first; judge by timeliness/signal quality, not P&L; don't change
-> the CJM math. **Do NOT re-tune fragility thresholds against the same 6 grinds.**
+> **▶ PICKING UP NEXT (saved 2026-06-09): DASHBOARD REDESIGN — a true, clean
+> dark-mode rework of `regime/dashboard.py` (display-only; no model changes).**
+> Pass 1 (Lato + dark charts + 2-week sparklines + fragility chart) shipped, but
+> the owner wants a real visual + information-architecture overhaul. Owner's
+> brief, verbatim-as-understood:
 >
-> - **Hosted dashboard / CI: healthy.** The Pages workflow now runs TWICE daily
->   (13:30 + 21:30 UTC) with the rebase+retry push fix; verified deploying
->   (fragility card live). If a push is rejected by a `regime-bot` history commit,
->   rebase onto `origin/main` (the only conflict is `data/signal_history.csv` —
->   take the remote's version; the next run re-appends). NOTE: `gh` CLI is NOT
->   installed locally, so inspect runs via the Actions tab or the live page's
->   `last-modified` header (curl `--max-time 15`), not `gh`.
+> 1. **Aesthetics: design a TRUE dark mode.** Right now "it still looks like a
+>    Claude website." Aim for the design language of clean fintech / 8VC
+>    portfolio companies — **Robinhood**, **Loop** (loop.com, owner liked it
+>    today) as references. Clean, modern, confident, minimal.
+> 2. **The CJM continuous risk dial is THE product** — make it bigger and put it
+>    **top & center** (its current "As of" reading is tiny in the bottom-right;
+>    that number is the most valuable, finely-tuned piece in the system).
+> 3. **Add an explainer module** ("what is actually happening / how the CJM runs")
+>    so the dashboard is **maximally interpretable** to the owner — plain-English
+>    description of the model + the leak-free walk-forward nowcast.
+> 4. **Module order:** (1) CJM risk dial (big, center), (2) **"Why — what's
+>    driving today's read"** (the CJM driver attribution; it directly follows the
+>    dial), ... overlays/fragility ..., and **Recent calls stays at the BOTTOM**
+>    (owner wants the history there).
+> 5. **Drop the 2-week BINARY Bull/Bear sparkline** — redundant given the
+>    continuous dial up top.
+> 6. **Rethink the short / long re-entry overlay display** — is there a more
+>    interpretable presentation? (Current is OK; find something better.)
+> 7. **Fragility chart is too messy / doesn't add value as-is.** Idea: **shade
+>    the leading stress components** more so you can TRACE the progression of the
+>    lead indicators over time (which tell lit up first, then next…). Make the
+>    component progression legible rather than a tangle of lines.
+>
+> Implementation notes: it's all `regime/dashboard.py` (render + the `_spark_*`
+> / `_fragility_card` helpers + the inline CSS). Keep it self-contained (inline
+> CSS, base64 PNGs) so it still publishes to GitHub Pages. `cmd_dashboard` passes
+> `rec`, `history`, and a dense `fragility` DataFrame. Render locally with
+> `dashboard --no-refresh --no-log` and eyeball in Simple Browser before shipping.
+>
+> **Deferred (still valuable, after the redesign):**
+> **(A) Harder validation of the fragility score** — per-component ablation,
+> false-positive clustering, behavior where component coverage is partial. (The
+> 2026-06-09 horse-races did a coarse version of this; a fuller pass is still
+> worthwhile.) **Do NOT re-tune thresholds on the same episodes.**
+> **(B) Fragility grade in the iMessage digest** (`notify.py`), change-gated on
+> grade transitions (WATCH→LEAN→ACT).
+> **(C) REPLACE-not-append feature selection** for the CJM (the remaining lever
+> on the structural short-ENTRY lag INSIDE the pure signal; don't change CJM math).
+> **(D) JPY as a SEPARATE alert** (not a blended fragility component — see DONE).
+>
+> - **Hosted dashboard / CI: healthy.** Pages workflow runs TWICE daily (13:30 +
+>   21:30 UTC) with the rebase+retry push fix. If a push is rejected by a
+>   `regime-bot` history commit, rebase onto `origin/main` (only conflict is
+>   `data/signal_history.csv` — take the remote's version; the next run
+>   re-appends). NOTE: `gh` CLI is NOT installed locally; inspect via the Actions
+>   tab or the live page's `last-modified` header (curl `--max-time 15`). And:
+>   every network call needs an explicit timeout + bounded loop (commits are
+>   instant; the PUSH is what stalls — wrap with `-c http.lowSpeedLimit=1000
+>   -c http.lowSpeedTime=20`).
